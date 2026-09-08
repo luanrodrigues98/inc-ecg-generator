@@ -4,6 +4,9 @@ import random
 import matplotlib.pyplot as plt
 import matplotlib
 from matplotlib.ticker import AutoMinorLocator
+from matplotlib.collections import LineCollection
+from matplotlib.transforms import Bbox
+from scipy.ndimage import gaussian_filter1d
 from TemplateFiles.generate_template import generate_template
 from math import ceil 
 from PIL import Image
@@ -25,7 +28,8 @@ standard_values = {'y_grid_size' : 0.5,
                    'lead_length' : 3,
                    'V1_length' : 12,
                    'width' : 11,
-                   'height' : 8.5
+                   'height' : 8.5,
+                   'trace_thickness_noise_length_mm' : 5.0
                    }
 
 standard_major_colors = {'colour1' : (0.4274,0.196,0.1843), #brown
@@ -54,6 +58,54 @@ papersize_values = {'A0' : (33.1,46.8),
 
 def inches_to_dots(value,resolution):
     return (value * resolution)
+
+def mm_to_points(value_mm):
+    #Convert a paper length in millimetres to matplotlib points (1/72 inch).
+    #Points are a physical unit, so a width derived this way is invariant to the
+    #render resolution.
+    return value_mm * 72.0 / 25.4
+
+def variable_trace_widths(num_points,base_width_points,jitter,samples_per_mm,correlation_length_mm,rng):
+    #Per-segment stroke widths for a trace of num_points points.
+    #The width is modulated with smooth 1D noise to imitate the variable pressure of a
+    #stylus; a perfectly constant stroke width is the strongest giveaway of a synthetic
+    #ECG. Returns num_points - 1 widths, one per segment, bounded to +/- jitter.
+    num_segments = max(num_points - 1, 1)
+    sigma = max(correlation_length_mm * samples_per_mm, 1.0)
+    noise = gaussian_filter1d(rng.standard_normal(num_segments), sigma=sigma, mode='reflect')
+    peak = np.max(np.abs(noise))
+    if peak > 0:
+        noise = noise / peak
+    return base_width_points * (1.0 + jitter * noise)
+
+def draw_trace(ax,x_vals,y_vals,color_line,trace_style,need_bbox):
+    #Draw one ecg trace and return its bounding box in display coordinates.
+    #With no jitter the trace is a plain Line2D, reproducing the upstream render
+    #exactly. Above zero the stroke width varies along the trace, which requires a
+    #LineCollection: a Line2D carries a single width for the whole polyline.
+    if trace_style['jitter'] <= 0:
+        artist = ax.plot(x_vals,
+                y_vals,
+                linewidth=trace_style['line_width'],
+                color=color_line
+                )[0]
+        return artist.get_window_extent() if need_bbox else None
+
+    points = np.column_stack([x_vals, y_vals]).reshape(-1, 1, 2)
+    segments = np.concatenate([points[:-1], points[1:]], axis=1)
+    widths = variable_trace_widths(len(x_vals), trace_style['line_width'], trace_style['jitter'],
+                                   trace_style['samples_per_mm'], trace_style['correlation_length_mm'],
+                                   trace_style['rng'])
+    ax.add_collection(LineCollection(segments, linewidths=widths, colors=[color_line],
+                                     capstyle='round', joinstyle='round', zorder=2))
+    if not need_bbox:
+        return None
+    #Line2D.get_window_extent is the extent of the transformed data points, ignoring
+    #stroke width, so the same value is reproduced here instead of read off the
+    #collection. Non-finite points are skipped, matching matplotlib.
+    xy = ax.transData.transform(np.column_stack([x_vals, y_vals]))
+    return Bbox([[np.nanmin(xy[:, 0]), np.nanmin(xy[:, 1])],
+                 [np.nanmax(xy[:, 0]), np.nanmax(xy[:, 1])]])
 
 #Function to plot raw ecg signal
 def ecg_plot(
@@ -89,7 +141,10 @@ def ecg_plot(
         json_dict=dict(),
         start_index=-1,
         store_configs=0,
-        lead_length_in_seconds=10
+        lead_length_in_seconds=10,
+        trace_thickness_mm=None,
+        trace_thickness_jitter=0.15,
+        seed=-1
         ):
     #Inputs :
     #ecg - Dictionary of ecg signal with lead names as keys
@@ -105,6 +160,10 @@ def ecg_plot(
     #show_lead_name - Option to show lead names or skip
     #show_dc_pulse - Option to show dc pulse
     #show_grid - Turn grid on or off
+    #trace_thickness_mm - Stroke width of the ecg trace in mm of paper. None keeps the
+    #                     line_width default, reproducing the upstream render exactly
+    #trace_thickness_jitter - Relative amplitude of the stroke width modulation along the
+    #                     trace. Only applied when trace_thickness_mm is set
 
 
     #Initialize some params
@@ -215,6 +274,23 @@ def ecg_plot(
     #Step size will be number of seconds per sample i.e 1/sampling_rate
     step = (1.0/sample_rate)
 
+    #Resolve the trace stroke width. trace_thickness_mm is a paper length, so converting
+    #it here keeps the rendered width invariant to the output resolution. Reassigning
+    #line_width also carries the new thickness into the calibration pulse (x1.5) and the
+    #lead separator ticks (x3), which the same stylus prints. When it is None nothing
+    #below changes and the upstream render is reproduced byte for byte.
+    if trace_thickness_mm is not None:
+        line_width = mm_to_points(trace_thickness_mm)
+    trace_jitter = trace_thickness_jitter if trace_thickness_mm is not None else 0.0
+    #1 mm of paper spans x_grid_size/(x_grid_inch*25.4) data units on the x axis
+    samples_per_mm = (x_grid_size/(standard_values['x_grid_inch']*25.4))*sample_rate
+    trace_style = {'line_width': line_width,
+                   'jitter': trace_jitter,
+                   'samples_per_mm': samples_per_mm,
+                   'correlation_length_mm': standard_values['trace_thickness_noise_length_mm'],
+                   'rng': np.random.default_rng([abs(seed), abs(start_index)]) if trace_jitter > 0 else None
+                   }
+
     dc_offset = 0
     if(show_dc_pulse):
         dc_offset = sample_rate*standard_values['dc_offset_length']*step
@@ -312,19 +388,15 @@ def ecg_plot(
                     x1, y1 = bb.x0*resolution/fig.dpi, bb.y0*resolution/fig.dpi
                     x2, y2 = bb.x1*resolution/fig.dpi, bb.y1*resolution/fig.dpi
 
-        t1 = ax.plot(np.arange(0,len(ecg[leadName])*step,step) + x_offset + dc_offset + x_gap, 
-                ecg[leadName] + y_offset,
-                linewidth=line_width, 
-                color=color_line
-                )
-        
         x_vals = np.arange(0,len(ecg[leadName])*step,step) + x_offset + dc_offset + x_gap
         y_vals = ecg[leadName] + y_offset
+
+        trace_bb = draw_trace(ax, x_vals, y_vals, color_line, trace_style, bbox)
 
         if (bbox):
             renderer1 = fig.canvas.get_renderer()
             transf = ax.transData.inverted()
-            bb = t1[0].get_window_extent()  
+            bb = trace_bb  
             if show_dc_pulse == False or (columns == 4 and (i != 0 and i != 4 and i != 8)):                                           
                 x1, y1 = bb.x0*resolution/fig.dpi, bb.y0*resolution/fig.dpi
                 x2, y2 = bb.x1*resolution/fig.dpi, bb.y1*resolution/fig.dpi
@@ -414,18 +486,15 @@ def ecg_plot(
         if(show_dc_pulse):
             dc_full_lead_offset = sample_rate*standard_values['dc_offset_length']*step
         
-        t1 = ax.plot(np.arange(0,len(ecg['full'+full_mode])*step,step) + x_gap + dc_full_lead_offset, 
-                    ecg['full'+full_mode] + row_height/2-lead_name_offset + 0.8,
-                    linewidth=line_width, 
-                    color=color_line
-                    )
         x_vals = np.arange(0,len(ecg['full'+full_mode])*step,step) + x_gap + dc_full_lead_offset
         y_vals = ecg['full'+full_mode] + row_height/2-lead_name_offset + 0.8
+
+        trace_bb = draw_trace(ax, x_vals, y_vals, color_line, trace_style, bbox)
 
         if (bbox):
             renderer1 = fig.canvas.get_renderer()
             transf = ax.transData.inverted()
-            bb = t1[0].get_window_extent()  
+            bb = trace_bb  
             if show_dc_pulse == False:                                           
                 x1, y1 = bb.x0*resolution/fig.dpi, bb.y0*resolution/fig.dpi
                 x2, y2 = bb.x1*resolution/fig.dpi, bb.y1*resolution/fig.dpi
@@ -504,6 +573,10 @@ def ecg_plot(
             json_dict['ecg_plot_color'] = [round(x*255., 2) for x in color_line]
     else:
         ax.grid(False)
+
+    if store_configs == 2:
+        json_dict['trace_thickness_mm'] = round(line_width*25.4/72.0, 4)
+        json_dict['trace_thickness_jitter'] = trace_jitter
 
     plt.savefig(os.path.join(output_dir,tail +'.png'),dpi=resolution)
     plt.close(fig)

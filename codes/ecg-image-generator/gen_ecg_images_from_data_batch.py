@@ -65,6 +65,9 @@ def get_parser():
     parser.add_argument('--deterministic_crop',action="store_true",default=False)
     parser.add_argument('--deterministic_temp',action="store_true",default=False)
 
+    parser.add_argument('--trace_thickness_mm',type=float,default=None)
+    parser.add_argument('--trace_thickness_jitter',type=float,default=0.15)
+
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)
     parser.add_argument('--wrinkles',action='store_true',default=False)
