@@ -29,7 +29,11 @@ standard_values = {'y_grid_size' : 0.5,
                    'V1_length' : 12,
                    'width' : 11,
                    'height' : 8.5,
-                   'trace_thickness_noise_length_mm' : 5.0
+                   'trace_thickness_noise_length_mm' : 5.0,
+                   'trace_dropout_full_gap_share' : 0.3,
+                   'trace_dropout_min_opacity' : 0.3,
+                   'trace_dropout_max_opacity' : 0.7,
+                   'trace_dropout_max_length_factor' : 5.0
                    }
 
 standard_major_colors = {'colour1' : (0.4274,0.196,0.1843), #brown
@@ -78,12 +82,111 @@ def variable_trace_widths(num_points,base_width_points,jitter,samples_per_mm,cor
         noise = noise / peak
     return base_width_points * (1.0 + jitter * noise)
 
+def trace_arc_length_mm(x_vals,y_vals):
+    #Cumulative arc length of the trace, in millimetres of paper.
+    #The two axes carry different physical scales - x runs at 25 mm/s and y at 10 mm/mV -
+    #so a step on each has to be converted before the two are combined. Non-finite
+    #samples come from --mask_unplotted_samples, and a single NaN would poison the
+    #cumulative sum and silently suppress every dropout downstream.
+    mm_per_x = standard_values['x_grid_inch']*25.4/standard_values['x_grid_size']
+    mm_per_y = standard_values['y_grid_inch']*25.4/standard_values['y_grid_size']
+    dx = np.nan_to_num(np.diff(np.asarray(x_vals,dtype=float)))*mm_per_x
+    dy = np.nan_to_num(np.diff(np.asarray(y_vals,dtype=float)))*mm_per_y
+    return np.concatenate(([0.0],np.cumsum(np.hypot(dx,dy))))
+
+def trace_dropout_opacities(x_vals,y_vals,dropout_rate,dropout_length_mm,rng):
+    #Per-segment opacity of the ecg trace: 1.0 where the ink is laid down normally, 0.0
+    #inside a full gap and 0.3-0.7 where the ink only fades. Imitates a stylus losing
+    #contact or ink failing.
+    #The dropouts are placed along the ARC LENGTH of the trace rather than along x: on a
+    #near vertical R wave the trace covers a lot of arc in very little x, and a dropout
+    #has to be able to land in the middle of the upstroke.
+    arc = trace_arc_length_mm(x_vals,y_vals)
+    num_segments = max(len(x_vals) - 1,1)
+    opacities = np.ones(num_segments)
+    total_mm = float(arc[-1])
+    if total_mm <= 0:
+        return opacities
+    #dropout_rate counts dropouts per cm of trace
+    num_dropouts = int(rng.poisson(dropout_rate*total_mm/10.0))
+    if num_dropouts == 0:
+        return opacities
+    starts = rng.uniform(0.0,total_mm,num_dropouts)
+    #Exponential lengths rather than uniform: short gaps are far more common than long
+    #ones. The clip keeps a single draw from the tail from swallowing a whole lead.
+    lengths = np.clip(rng.exponential(dropout_length_mm,num_dropouts),
+                      0.05,
+                      dropout_length_mm*standard_values['trace_dropout_max_length_factor'])
+    #Partial fading is the more common case in real thermal printing, so only a minority
+    #of the dropouts take the ink away completely.
+    is_full_gap = rng.random(num_dropouts) < standard_values['trace_dropout_full_gap_share']
+    faded = rng.uniform(standard_values['trace_dropout_min_opacity'],
+                        standard_values['trace_dropout_max_opacity'],
+                        num_dropouts)
+    values = np.where(is_full_gap,0.0,faded)
+    #Each dropout is blended into the segments it overlaps, in proportion to how much of
+    #the segment arc it covers, rather than by whole segments. Segment membership would
+    #let a short dropout blank a long segment: on a steep R wave a single sample step
+    #spans several mm of arc, and a 0.5 mm ink failure must not erase all of it. Blending
+    #also softens the two segments at the edge of a gap.
+    #The removed ink accumulates, so two dropouts landing on the same segment compound
+    #towards a full gap instead of the more severe one hiding the other.
+    segment_lengths = np.diff(arc)
+    removed = np.zeros(num_segments)
+    for start,length,value in zip(starts,lengths,values):
+        lo = max(int(np.searchsorted(arc,start,side='right')) - 1,0)
+        hi = min(int(np.searchsorted(arc,start + length,side='left')) + 1,num_segments)
+        if hi <= lo:
+            continue
+        overlap = (np.minimum(arc[lo + 1:hi + 1],start + length)
+                   - np.maximum(arc[lo:hi],start))
+        coverage = np.clip(overlap/np.maximum(segment_lengths[lo:hi],1e-12),0.0,1.0)
+        removed[lo:hi] += coverage*(1.0 - value)
+    return np.clip(opacities - removed,0.0,1.0)
+
+def trace_pieces(segments,widths,opacities,merge_opaque):
+    #Group the per-segment polyline into the pieces that are actually stroked, dropping
+    #the segments a full gap removed.
+    #A run of faded segments is emitted as ONE polyline at the mean width of the run
+    #instead of one path per segment: where two translucent strokes overlap, their round
+    #caps composite to a darker value than either (two strokes at 0.5 give 0.75), which
+    #would read as beading exactly inside the dropouts. Opaque strokes do not composite,
+    #so they keep their own width and the existing per-segment modulation.
+    paths = []
+    path_widths = []
+    path_opacities = []
+    num_segments = len(segments)
+    index = 0
+    while index < num_segments:
+        opacity = opacities[index]
+        run = index
+        while run < num_segments and opacities[run] == opacity:
+            run += 1
+        if opacity > 0:
+            if opacity < 1.0 or merge_opaque:
+                paths.append(np.concatenate([segments[index][:1],segments[index:run][:,1]]))
+                path_widths.append(float(np.mean(widths[index:run])))
+                path_opacities.append(float(opacity))
+            else:
+                for k in range(index,run):
+                    paths.append(segments[k])
+                    path_widths.append(float(widths[k]))
+                    path_opacities.append(1.0)
+        index = run
+    return paths,path_widths,path_opacities
+
 def draw_trace(ax,x_vals,y_vals,color_line,trace_style,need_bbox):
     #Draw one ecg trace and return its bounding box in display coordinates.
-    #With no jitter the trace is a plain Line2D, reproducing the upstream render
-    #exactly. Above zero the stroke width varies along the trace, which requires a
-    #LineCollection: a Line2D carries a single width for the whole polyline.
-    if trace_style['jitter'] <= 0:
+    #With no jitter and no dropouts the trace is a plain Line2D, reproducing the upstream
+    #render exactly. Beyond that the stroke width varies along the trace and dropouts take
+    #ink away, both of which require a LineCollection: a Line2D carries a single width and
+    #a single opacity for the whole polyline.
+    opacities = None
+    if trace_style['dropout_rate'] > 0 and trace_style['dropout_length_mm'] > 0:
+        opacities = trace_dropout_opacities(x_vals,y_vals,trace_style['dropout_rate'],
+                                            trace_style['dropout_length_mm'],
+                                            trace_style['dropout_rng'])
+    if trace_style['jitter'] <= 0 and opacities is None:
         artist = ax.plot(x_vals,
                 y_vals,
                 linewidth=trace_style['line_width'],
@@ -93,11 +196,21 @@ def draw_trace(ax,x_vals,y_vals,color_line,trace_style,need_bbox):
 
     points = np.column_stack([x_vals, y_vals]).reshape(-1, 1, 2)
     segments = np.concatenate([points[:-1], points[1:]], axis=1)
-    widths = variable_trace_widths(len(x_vals), trace_style['line_width'], trace_style['jitter'],
-                                   trace_style['samples_per_mm'], trace_style['correlation_length_mm'],
-                                   trace_style['rng'])
-    ax.add_collection(LineCollection(segments, linewidths=widths, colors=[color_line],
-                                     capstyle='round', joinstyle='round', zorder=2))
+    if trace_style['jitter'] > 0:
+        widths = variable_trace_widths(len(x_vals), trace_style['line_width'], trace_style['jitter'],
+                                       trace_style['samples_per_mm'], trace_style['correlation_length_mm'],
+                                       trace_style['rng'])
+    else:
+        widths = np.full(len(segments), trace_style['line_width'])
+    if opacities is None:
+        opacities = np.ones(len(segments))
+    paths, path_widths, path_opacities = trace_pieces(segments, widths, opacities,
+                                                      trace_style['jitter'] <= 0)
+    if paths:
+        colors = np.tile(matplotlib.colors.to_rgba(color_line), (len(paths), 1))
+        colors[:, 3] = path_opacities
+        ax.add_collection(LineCollection(paths, linewidths=path_widths, colors=colors,
+                                         capstyle='round', joinstyle='round', zorder=2))
     if not need_bbox:
         return None
     #Line2D.get_window_extent is the extent of the transformed data points, ignoring
@@ -144,6 +257,8 @@ def ecg_plot(
         lead_length_in_seconds=10,
         trace_thickness_mm=None,
         trace_thickness_jitter=0.15,
+        trace_dropout_rate=0.0,
+        trace_dropout_length_mm=0.5,
         seed=-1
         ):
     #Inputs :
@@ -164,6 +279,10 @@ def ecg_plot(
     #                     line_width default, reproducing the upstream render exactly
     #trace_thickness_jitter - Relative amplitude of the stroke width modulation along the
     #                     trace. Only applied when trace_thickness_mm is set
+    #trace_dropout_rate - Intermittent trace dropouts per cm of trace. 0 disables them and
+    #                     reproduces the render exactly
+    #trace_dropout_length_mm - Mean dropout length in mm of paper, drawn from an
+    #                     exponential distribution
 
 
     #Initialize some params
@@ -288,7 +407,12 @@ def ecg_plot(
                    'jitter': trace_jitter,
                    'samples_per_mm': samples_per_mm,
                    'correlation_length_mm': standard_values['trace_thickness_noise_length_mm'],
-                   'rng': np.random.default_rng([abs(seed), abs(start_index)]) if trace_jitter > 0 else None
+                   'rng': np.random.default_rng([abs(seed), abs(start_index)]) if trace_jitter > 0 else None,
+                   'dropout_rate': trace_dropout_rate,
+                   'dropout_length_mm': trace_dropout_length_mm,
+                   #A stream of its own, so that turning the dropouts on never shifts the
+                   #width modulation nor the global random stream that picks grid colours
+                   'dropout_rng': np.random.default_rng([abs(seed), abs(start_index), 2]) if trace_dropout_rate > 0 else None
                    }
 
     dc_offset = 0
@@ -577,6 +701,8 @@ def ecg_plot(
     if store_configs == 2:
         json_dict['trace_thickness_mm'] = round(line_width*25.4/72.0, 4)
         json_dict['trace_thickness_jitter'] = trace_jitter
+        json_dict['trace_dropout_rate'] = trace_dropout_rate
+        json_dict['trace_dropout_length_mm'] = trace_dropout_length_mm
 
     plt.savefig(os.path.join(output_dir,tail +'.png'),dpi=resolution)
     plt.close(fig)
