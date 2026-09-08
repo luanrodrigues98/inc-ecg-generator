@@ -10,6 +10,7 @@ from extract_leads import get_paper_ecg
 from HandwrittenText.generate import get_handwritten
 from CreasesWrinkles.creases import get_creased
 from ImageAugmentation.augment import get_augment
+from PaperCrumple.crumple import get_crumpled, light_azimuth
 import warnings
 from helper_functions import read_config_file
 
@@ -73,11 +74,16 @@ def get_parser():
     parser.add_argument('--deterministic_noise',action="store_true",default=False)
     parser.add_argument('--deterministic_crop',action="store_true",default=False)
     parser.add_argument('--deterministic_temp',action="store_true",default=False)
+    parser.add_argument('--deterministic_crumple',action="store_true",default=False)
 
     parser.add_argument('--trace_thickness_mm',type=float,default=None)
     parser.add_argument('--trace_thickness_jitter',type=float,default=0.15)
     parser.add_argument('--trace_dropout_rate',type=float,default=0.0)
     parser.add_argument('--trace_dropout_length_mm',type=float,default=0.5)
+
+    parser.add_argument('--crumple_amplitude',type=float,default=0.0)
+    parser.add_argument('--crumple_scale_cm',type=float,default=8.0)
+    parser.add_argument('--illum_azimuth_deg',type=float,default=-1)
 
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)
@@ -188,6 +194,27 @@ def run_single_file(args):
                 json_dict['crease_angle'] = crease_angle
                 json_dict['number_of_creases_horizontally'] = num_creases_horizontally
                 json_dict['number_of_creases_vertically'] = num_creases_vertically
+
+            #Paper crumpling: the last substrate stage, before the camera stages. A single
+            #height field drives both the deformation and its shading, so creases and
+            #their shadows cannot drift apart.
+            #The amplitude on the command line is a maximum, sampled per image unless
+            #--deterministic_crumple, following the idiom of -ca and -rot. It is only
+            #drawn when the parameter is active, so that the default of 0 leaves the
+            #global random sequence, and therefore the render, untouched.
+            if args.crumple_amplitude > 0 and args.deterministic_crumple == False:
+                crumple_amplitude = random.uniform(0,args.crumple_amplitude)
+            else:
+                crumple_amplitude = args.crumple_amplitude
+            illum_azimuth_deg = light_azimuth(args.illum_azimuth_deg,out,seed=args.seed,start_index=args.start_index)
+
+            if crumple_amplitude > 0:
+                out = get_crumpled(out,resolution=resolution,crumple_amplitude=crumple_amplitude,crumple_scale_cm=args.crumple_scale_cm,illum_azimuth_deg=illum_azimuth_deg,seed=args.seed,start_index=args.start_index,json_dict=json_dict)
+
+            if args.store_config == 2:
+                json_dict['crumple_amplitude'] = round(crumple_amplitude,4)
+                json_dict['crumple_scale_cm'] = args.crumple_scale_cm
+                json_dict['illum_azimuth_deg'] = round(illum_azimuth_deg,2)
 
             if(augment):
                 noise = args.noise if (args.deterministic_noise) else random.choice(range(1,args.noise+1))

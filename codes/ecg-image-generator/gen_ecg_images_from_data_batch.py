@@ -64,11 +64,16 @@ def get_parser():
     parser.add_argument('--deterministic_noise',action="store_true",default=False)
     parser.add_argument('--deterministic_crop',action="store_true",default=False)
     parser.add_argument('--deterministic_temp',action="store_true",default=False)
+    parser.add_argument('--deterministic_crumple',action="store_true",default=False)
 
     parser.add_argument('--trace_thickness_mm',type=float,default=None)
     parser.add_argument('--trace_thickness_jitter',type=float,default=0.15)
     parser.add_argument('--trace_dropout_rate',type=float,default=0.0)
     parser.add_argument('--trace_dropout_length_mm',type=float,default=0.5)
+
+    parser.add_argument('--crumple_amplitude',type=float,default=0.0)
+    parser.add_argument('--crumple_scale_cm',type=float,default=8.0)
+    parser.add_argument('--illum_azimuth_deg',type=float,default=-1)
 
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)
