@@ -11,6 +11,7 @@ from HandwrittenText.generate import get_handwritten
 from CreasesWrinkles.creases import get_creased
 from ImageAugmentation.augment import get_augment
 from PaperCrumple.crumple import get_crumpled, light_azimuth
+from CameraOptics.optics import get_blurred
 import warnings
 from helper_functions import read_config_file
 
@@ -75,6 +76,7 @@ def get_parser():
     parser.add_argument('--deterministic_crop',action="store_true",default=False)
     parser.add_argument('--deterministic_temp',action="store_true",default=False)
     parser.add_argument('--deterministic_crumple',action="store_true",default=False)
+    parser.add_argument('--deterministic_blur',action="store_true",default=False)
 
     parser.add_argument('--trace_thickness_mm',type=float,default=None)
     parser.add_argument('--trace_thickness_jitter',type=float,default=0.15)
@@ -84,6 +86,8 @@ def get_parser():
     parser.add_argument('--crumple_amplitude',type=float,default=0.0)
     parser.add_argument('--crumple_scale_cm',type=float,default=8.0)
     parser.add_argument('--illum_azimuth_deg',type=float,default=-1)
+
+    parser.add_argument('--blur_sigma',type=float,default=0.0)
 
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)
@@ -215,6 +219,30 @@ def run_single_file(args):
                 json_dict['crumple_amplitude'] = round(crumple_amplitude,4)
                 json_dict['crumple_scale_cm'] = args.crumple_scale_cm
                 json_dict['illum_azimuth_deg'] = round(illum_azimuth_deg,2)
+
+            #Optical blur: the first camera stage, acting on the scene as already formed.
+            #It has to run before get_augment, whose gaussian noise belongs to the sensor
+            #and therefore lands on top of the blur; blurring after the noise would smooth
+            #the noise away.
+            #The sigma on the command line is a maximum, sampled per image unless
+            #--deterministic_blur, following the idiom of -ca, -rot and --crumple_amplitude.
+            #It is only drawn when the parameter is active, so that the default of 0 leaves
+            #the global random sequence, and therefore the render, untouched.
+            if args.blur_sigma > 0 and args.deterministic_blur == False:
+                blur_sigma = random.uniform(0,args.blur_sigma)
+            else:
+                blur_sigma = args.blur_sigma
+
+            if blur_sigma > 0:
+                out = get_blurred(out,blur_sigma=blur_sigma)
+
+            if args.store_config == 2:
+                #blur_sigma is in px at the render resolution, which is what the parameter
+                #means and what calibration bisects on. The mm equivalent is recorded
+                #beside it so that annotations from renders made at different dpi can still
+                #be compared in paper space.
+                json_dict['blur_sigma'] = round(blur_sigma,4)
+                json_dict['blur_sigma_mm'] = round(blur_sigma*25.4/resolution,4)
 
             if(augment):
                 noise = args.noise if (args.deterministic_noise) else random.choice(range(1,args.noise+1))
