@@ -164,3 +164,7 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 codes/ecg-image-generator/HandwrittenText.png
+codes/ecg-image-generator/sample-data/ptb-xl/*
+codes/ecg-image-generator/out/*
+sample-data/*
+codes/ecg-image-generator/.venv310/*
