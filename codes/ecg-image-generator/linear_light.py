@@ -5,8 +5,9 @@ import numpy as np
 #radiance. The pair below was written twice before this module existed, once in
 #PaperCrumple/crumple.py and once in CameraOptics/optics.py, each with a comment saying
 #the shared home belonged to the commit that first needed it in a third place. The
-#illumination gradient is that third place, and every photometric stage still to come -
-#exposure, white balance, vignette - multiplies in linear light too.
+#illumination gradient is that third place. Exposure, white balance and the vignette have
+#since joined it, all three fused into CameraPhotometry.get_exposed so that the mask, the
+#channel gains and the exposure meet the [0,1] clip below exactly once.
 
 #Bisection that keeps a multiplicative mask from acting as a global gain. The gain is
 #solved on a decimated copy: the mean is a global statistic and does not need every

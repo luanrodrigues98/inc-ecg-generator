@@ -67,6 +67,7 @@ def get_parser():
     parser.add_argument('--deterministic_crumple',action="store_true",default=False)
     parser.add_argument('--deterministic_blur',action="store_true",default=False)
     parser.add_argument('--deterministic_illum',action="store_true",default=False)
+    parser.add_argument('--deterministic_vignette',action="store_true",default=False)
 
     parser.add_argument('--trace_thickness_mm',type=float,default=None)
     parser.add_argument('--trace_thickness_jitter',type=float,default=0.15)
@@ -87,6 +88,8 @@ def get_parser():
     parser.add_argument('--wb_r',type=float,default=1.0)
     parser.add_argument('--wb_b',type=float,default=1.0)
     parser.add_argument('--wb_mired_jitter',type=float,default=0.0)
+
+    parser.add_argument('--vignette',type=float,default=0.0)
 
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)

@@ -180,6 +180,43 @@ def build_args(config, config_path):
                 "%s: %s must be greater than 0, got %s. 1.0 is the neutral gain and 0 "
                 "would delete the channel." % (config_path, key, getattr(args, key)))
 
+    #vignette has two randomisation paths for the OPPOSITE reason exposure does. Its
+    #neutral is 0, so it uses the uniform(0, max) idiom of --crumple_amplitude,
+    #--blur_sigma and --illum_strength: the value reaching run_single_file is a maximum
+    #that gets drawn inside again. Put that key under randomize: and the runner draws a
+    #maximum per record and run_single_file draws uniform(0, that) inside it, which is a
+    #second draw on top of the first - the same double draw the exposure guard above
+    #refuses, and it does not merely widen the distribution here, it BIASES it: the
+    #product of two uniforms piles up near zero, so most of the batch would come out with
+    #almost no vignette while the declared range said otherwise.
+    #deterministic_vignette: true switches the inner draw off and makes the randomize
+    #block the single per-record draw, which is the combination to use.
+    if 'vignette' in randomize and not args.deterministic_vignette:
+        raise SystemExit(
+            "%s: vignette is drawn per record under randomize: and drawn again inside "
+            "run_single_file, which samples uniform(0, vignette) unless "
+            "deterministic_vignette is set. The two compound into a distribution biased "
+            "towards 0. Set deterministic_vignette: true to make randomize: the only "
+            "draw, or drop the key from randomize: and let the per-image draw use the "
+            "fixed value as its maximum." % config_path)
+
+    #Outside [0, 1) the mask is not a vignette: negative inverts it into a bright ring on
+    #a dark centre, which no lens makes, and at 1 the corners are black before the mask is
+    #normalised. Refused rather than clamped, like the gains above. The bound is checked on
+    #the randomize range too, since that is where the value actually comes from.
+    if 'vignette' in randomize:
+        spec = randomize['vignette']
+        kind = next(iter(spec))
+        vignette_bounds = spec[kind] if kind == 'choice' else spec[kind]
+    else:
+        vignette_bounds = [args.vignette]
+    for bound in vignette_bounds:
+        if bound < 0 or bound >= 1:
+            raise SystemExit(
+                "%s: vignette must be in [0, 1), got %s. 0 is the neutral falloff and at "
+                "1 the corners are black before the mask is normalised; the roteiro's "
+                "own calibration bracket stops at 0.9." % (config_path, bound))
+
     #deterministic_temp was inert upstream, so its companion --temperature kept a default
     #of 40000 that nothing ever read. Reading the flag makes that default live, and 40000 K
     #is the blue end of imgaug's table - a page the colour of a computer screen. Nobody who

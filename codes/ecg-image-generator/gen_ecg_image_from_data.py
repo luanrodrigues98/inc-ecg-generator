@@ -85,6 +85,7 @@ def get_parser():
     parser.add_argument("--deterministic_crumple", action="store_true", default=False)
     parser.add_argument("--deterministic_blur", action="store_true", default=False)
     parser.add_argument("--deterministic_illum", action="store_true", default=False)
+    parser.add_argument("--deterministic_vignette", action="store_true", default=False)
 
     parser.add_argument("--trace_thickness_mm", type=float, default=None)
     parser.add_argument("--trace_thickness_jitter", type=float, default=0.15)
@@ -106,6 +107,8 @@ def get_parser():
     parser.add_argument("--wb_r", type=float, default=1.0)
     parser.add_argument("--wb_b", type=float, default=1.0)
     parser.add_argument("--wb_mired_jitter", type=float, default=0.0)
+
+    parser.add_argument("--vignette", type=float, default=0.0)
 
     parser.add_argument("--fully_random", action="store_true", default=False)
     parser.add_argument("--hw_text", action="store_true", default=False)
@@ -443,7 +446,26 @@ def run_single_file(args):
         wb_r = args.wb_r * jitter_r
         wb_b = args.wb_b * jitter_b
 
-        out = get_exposed(out, exposure=exposure, wb_r=wb_r, wb_b=wb_b)
+        # Vignette: the radial luminance falloff of the optical system, fused into the
+        # exposure stage. Unlike the illumination gradient it is SYMMETRIC - it is a
+        # property of the lens rather than of where the light is - which is why the two
+        # are separate parameters and not one, and why nothing here reads the azimuth.
+        # It follows the idiom of -ca, -rot, --crumple_amplitude, --blur_sigma and
+        # --illum_strength rather than the jitter idiom of --exposure and the white
+        # balance: the value on the command line is a MAXIMUM, sampled per image unless
+        # --deterministic_vignette. Which idiom applies is decided by the neutral value,
+        # not by taste - a jitter exists for exposure and white balance because their
+        # neutral is 1.0 and their range runs to both sides of it, while a falloff is
+        # neutral at 0 and one sided, so uniform(0, max) covers it.
+        # Drawn only when the parameter is active, so the default of 0 leaves the global
+        # random sequence - and therefore every augment draw below - untouched.
+        if args.vignette > 0 and args.deterministic_vignette == False:
+            vignette = random.uniform(0, args.vignette)
+        else:
+            vignette = args.vignette
+
+        out = get_exposed(out, exposure=exposure, wb_r=wb_r, wb_b=wb_b,
+                          vignette=vignette)
 
         if args.store_config == 2:
             # Recorded in stops beside the gain: a batch varies exposure log uniformly,
@@ -462,6 +484,12 @@ def run_single_file(args):
             if args.wb_mired_jitter > 0:
                 json_dict["wb_mired_offset"] = round(wb_mired_offset, 3)
                 json_dict["wb_cct_k"] = round(mired_to_cct_k(wb_mired_offset), 1)
+            # The strength actually applied, not the maximum on the command line.
+            # No second figure beside it: unlike the exposure there is no other axis
+            # this one is naturally flat on, and the geometry it implies is closed form
+            # anyway - the mask is 1/(1 - v/3) at the centre and (1 - v)/(1 - v/3) at
+            # the corners, so a reader with this number has the whole falloff.
+            json_dict["vignette"] = round(vignette, 4)
 
         if augment:
             noise = (

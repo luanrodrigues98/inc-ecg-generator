@@ -18,6 +18,28 @@ EXPOSURE_NEUTRAL = 1.0
 #consequence: at 1.0 each the stage must not touch the file at all.
 WB_NEUTRAL = 1.0
 
+#Neutral for the vignette, and it goes back to ZERO after two parameters whose neutral was
+#one. The header above makes a point of exposure being the first parameter in this chain
+#whose neutral is not zero, because it is a gain rather than an amount of something added.
+#The vignette is neither: it is the STRENGTH of a falloff, 1 - v*r^2 is the identity mask
+#at v = 0, and the neutral is zero again. The consequence is the one every parameter here
+#carries - at the neutral value the stage must not touch the file at all.
+VIGNETTE_NEUTRAL = 0.0
+
+#Floor on the mask, mirroring ILLUM_MIN_GAIN and CRUMPLE_MIN_LAMBERT. 1 - v*r^2 takes its
+#minimum 1 - v at the corners, so the floor only binds above v 0.95: it is unreachable
+#inside the documented range of 0 - 0.6 and inside the roteiro's 0 - 0.9 calibration
+#bracket. That headroom is deliberate rather than merely cautious. The closed form
+#mask.mean() = 1 - v/3 below is used as a self test of the normalisation, and it is exact
+#only while the floor does not bind - a higher floor would make the test quietly stop
+#being a test at the top of the range, which is where it is most needed.
+VIGNETTE_MIN_GAIN = 0.05
+
+#Largest strength the mask accepts, exclusive. At exactly 1 the corners are zero before
+#normalisation, which is a black ring and not a vignette, and the roteiro's own bracket
+#stops at 0.9.
+VIGNETTE_MAX = 1.0
+
 #D65 in mireds, the reciprocal megakelvin 1e6/T. Colour temperature is drawn on THIS axis
 #and not in kelvin, for the same reason exposure is drawn in stops and not in gain: 500 K
 #is an enormous shift at 3000 K and invisible at 15000 K, while a mired is roughly the
@@ -82,23 +104,81 @@ def mired_to_cct_k(mired_offset):
     #recognises; the mired is what the draw is uniform on.
     return 1.0e6/(D65_MIRED + float(mired_offset))
 
+def vignette_mask(shape,vignette):
+    #Multiplicative gain per pixel, mean 1.0. Radial luminance falloff of the optical
+    #system: every lens delivers less light off axis, and the roteiro keeps it apart from
+    #the illumination gradient of the stage before because the two have different physical
+    #causes and different SHAPES. The gradient is asymmetric - it points at the lamp - and
+    #this one is radially symmetric, a property of the camera and not of the room. That
+    #difference is also the only honest way to tell them apart in the measurements, since
+    #they move the same spatial statistics; see the edge band table in the evaluation.
+    height,width = shape
+    rows,cols = np.mgrid[0:height,0:width]
+    #Normalised by HALF THE DIAGONAL, exactly as illumination_mask does and exactly as the
+    #roteiro requires. Dividing x and y separately - which is what the one published
+    #implementation of this transform does - gives an ELLIPTICAL mask whose shape follows
+    #the page aspect ratio, so one value of the parameter would mean different things on a
+    #3:2 page and on a square one. By the diagonal the mask is circular, r is exactly 1 at
+    #the corners whatever the padding, and the parameter is invariant to both the aspect
+    #ratio and the render resolution.
+    half_y = (height - 1)/2.0
+    half_x = (width - 1)/2.0
+    half_diagonal = float(np.hypot(half_x,half_y))
+    if half_diagonal <= 0:
+        return None
+    offset_y = (rows - half_y)/half_diagonal
+    offset_x = (cols - half_x)/half_diagonal
+    radius_squared = offset_x*offset_x + offset_y*offset_y
+
+    #The roteiro's additive form, kept literally rather than replaced by the exponential
+    #the illumination gradient ended up needing. The two stages fail differently and the
+    #difference is why the deviation made there is not made here: the illumination field is
+    #antisymmetric about the centre, so 1 + s*field crossed zero in the MIDDLE of its
+    #useful range and had to be clamped. Here the minimum is 1 - v, reached only at the
+    #corners, and the whole documented range stays clear of it. The floor is the safety net
+    #for a caller that ignores the bound, not a working limit.
+    mask = np.maximum(1.0 - float(vignette)*radius_squared,VIGNETTE_MIN_GAIN)
+
+    #Mean 1.0, which the roteiro calls MANDATORY for this parameter by name: an
+    #un-normalised falloff is a brightness change wearing a mask, and it would then compete
+    #with exposure for lum_mean - the oscillation the calibration notes blame for 85%
+    #median error. It is necessary and NOT sufficient on this page, for the reason set out
+    #where the bisection is called below.
+    #The divisor has a closed form worth knowing, and worth checking against: under this
+    #normalisation E[r^2] = 1/3 exactly for any rectangle, independent of the aspect ratio,
+    #because E[x^2] = half_x^2/3 and E[y^2] = half_y^2/3 sum to a third of the squared half
+    #diagonal. So mask.mean() = 1 - v/3, the normalised centre is 1/(1 - v/3) and the
+    #normalised corner is (1 - v)/(1 - v/3): 1.25 and 0.50 at v 0.6, 1.43 and 0.14 at 0.9.
+    return (mask/float(mask.mean())).astype(np.float32)
+
 #Luminance weights, BGR to match the channel order cv2 reads a file in. Rec.601, which is
 #the convention cv2.cvtColor(..., COLOR_BGR2GRAY) uses and therefore the one lum_mean is
 #measured with.
 LUMINANCE_WEIGHTS_BGR = np.array([0.114,0.587,0.299],dtype=np.float32)
 
-def _mean_preserving_channel_gain(linear,gains,exposure):
+def _mean_preserving_gain(linear,gains,exposure,mask=None):
     #Scalar gain that holds the displayed LUMINANCE of the page where it was before the
-    #white balance. Same bisection, same constants and same reason as mean_preserving_gain
+    #white balance and the vignette. Same bisection, same constants and same reason as
+    #mean_preserving_gain
     #in linear_light.py, which the crumple and the illumination use: without it this stage
     #is a small exposure change in disguise and competes with the exposure parameter for
     #lum_mean, which is the oscillation the calibration notes blame for 85% error.
-    #It is written here instead of calling that helper because the helper's argument is a
-    #SPATIAL mask and its body decimates the mask alongside the image. A constant gain per
-    #channel has no spatial extent to decimate, so the shared function would have to grow a
-    #branch that changes how its existing two callers slice their masks - and those two
-    #callers are precisely what the bit for bit regression of this increment is measured
-    #against. The constants are still imported, so there is one definition of the bracket.
+    #It is written here instead of calling that helper because of the two differences set
+    #out below, and those two differences are also why the vignette solves HERE rather than
+    #calling the shared helper the way the illumination gradient does. The constants are
+    #still imported, so there is one definition of the bracket.
+    #
+    #ONE SOLVE COVERS THE WHOLE FUSED MULTIPLIER - the channel gains of the white balance
+    #and the spatial mask of the vignette together. Two bisections run in sequence would
+    #each be exact only with the other absent, since the invariant they hold is measured in
+    #display space and the sRGB curve does not distribute over the two multiplies. One
+    #scalar solved against the finished product is exact, and it is also the honest shape
+    #of the requirement: what must not move is lum_mean of the image this stage writes, not
+    #lum_mean of an intermediate that never reaches a file.
+    #The mask is decimated on the SAME stride as the image, as mean_preserving_gain does,
+    #and the multiply sits inside a branch so that the white balance only path keeps the
+    #exact floating point operations it had before the vignette existed - which is what the
+    #bit for bit regression of this increment is measured against.
     #
     #Two things differ from that helper, and both were measured rather than assumed.
     #
@@ -122,6 +202,8 @@ def _mean_preserving_channel_gain(linear,gains,exposure):
     sample = linear[::stride,::stride]*float(exposure)
     target = float((linear_to_srgb(sample)*LUMINANCE_WEIGHTS_BGR).sum(axis=2).mean())
     balanced = sample*gains
+    if mask is not None:
+        balanced = balanced*mask[::stride,::stride,np.newaxis]
     low,high = GAIN_BRACKET
     for _ in range(GAIN_ITERATIONS):
         gain = (low + high)/2.0
@@ -134,7 +216,8 @@ def _mean_preserving_channel_gain(linear,gains,exposure):
     return (low + high)/2.0
 
 #Main function to expose the photograph
-def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL):
+def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
+                vignette=VIGNETTE_NEUTRAL):
     #Exposure of the camera: the scalar gain between the light that reached the sensor and
     #the value recorded for it. It multiplies IN LINEAR LIGHT, which is what makes it a
     #gain at all - the same factor applied to the sRGB values would be a power law on
@@ -156,6 +239,21 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL):
     #page where the whole colour cast being modelled is about ten levels wide. Physically
     #the two are one operation anyway, a diagonal gain matrix in linear light, which is
     #what the roteiro means by "per-channel gains applied alongside exposure".
+    #
+    #THE VIGNETTE IS FUSED HERE TOO, and for a stronger reason than the quantisation one.
+    #linear_to_srgb clips to [0,1], so every stage boundary is a clip as well as a
+    #quantisation, and after the exposure roughly half of this page sits at pure white. A
+    #vignette applied as a separate stage AFTER this one would therefore darken pixels that
+    #have already been flattened onto 255: the corner it dims would come back as a flat
+    #grey with the grid and the trace crushed out of it, because the values that
+    #distinguished them were discarded by the earlier clip. Multiplied in here, the mask and
+    #the exposure meet the ceiling ONCE, and the corner the vignette darkens keeps the
+    #detail it had. The roteiro asks the photometric chain to stay in float for exactly this
+    #reason and the comment further down explains why it cannot here; fusing the vignette is
+    #the part of that ask this branch can actually honour.
+    #The order among the three is irrelevant to the arithmetic - they are all
+    #multiplications in linear light and they commute - but not to the mean preserving
+    #solve, which is nonlinear, and that is why one bisection covers all of them.
     filename = input_file
     #A gain of 0 or less is not a dark page, it is a nonsense request: 0 is black and a
     #negative gain has no meaning at all. Returning quietly would make the flag inert for
@@ -169,7 +267,18 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL):
         raise ValueError('wb_r and wb_b must be greater than 0, got %r and %r '
                          '(1.0 each is the neutral white balance; 0 would remove a '
                          'channel entirely)' % (wb_r,wb_b))
-    if exposure == EXPOSURE_NEUTRAL and wb_r == WB_NEUTRAL and wb_b == WB_NEUTRAL:
+    #A negative strength is an INVERTED vignette - a bright ring on a dark centre, which no
+    #lens produces - and at 1 the corners reach zero before the mask is normalised. Refused
+    #rather than clamped, for the reason the exposure guard above gives.
+    if vignette < VIGNETTE_NEUTRAL or vignette >= VIGNETTE_MAX:
+        raise ValueError('vignette must be in [0, 1), got %r '
+                         '(0 is the neutral falloff; at 1 the corners are black before '
+                         'the mask is normalised)' % (vignette,))
+    #The third term is not decoration. Without it --vignette would be silently inert
+    #whenever exposure and white balance are both at their neutrals, which is a flag that
+    #parses and does nothing - the upstream failure this codebase refuses everywhere else.
+    if (exposure == EXPOSURE_NEUTRAL and wb_r == WB_NEUTRAL and wb_b == WB_NEUTRAL
+            and vignette == VIGNETTE_NEUTRAL):
         return filename
 
     image = cv2.imread(filename,cv2.IMREAD_UNCHANGED)
@@ -198,7 +307,15 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL):
     #stage runs at all.
     linear = srgb_to_linear(colour)
 
-    if wb_r != WB_NEUTRAL or wb_b != WB_NEUTRAL:
+    #None rather than an identity mask when the parameter is off, so that the white balance
+    #only path below reaches the bisection with exactly the arguments it had before this
+    #parameter existed. An all ones array would be a per pixel identity in exact
+    #arithmetic, but it would also change which expressions are evaluated, and the
+    #regression this increment is measured against is byte equality of the finished PNG.
+    mask = (vignette_mask(linear.shape[:2],vignette)
+            if vignette != VIGNETTE_NEUTRAL else None)
+
+    if wb_r != WB_NEUTRAL or wb_b != WB_NEUTRAL or mask is not None:
         #BGR, because that is the order cv2 read the file in. Green is untouched: a white
         #balance has two degrees of freedom and green is the reference both of them are
         #measured against.
@@ -206,9 +323,21 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL):
         #would divide by a sum of float literals that is not exactly 1.0, so the stage
         #would multiply by 0.9999998 at its neutral setting and lose the bit for bit
         #regression.
+        #With the white balance neutral the triple is (1, 1, 1) and this reduces to the
+        #scalar the vignette needs, which is why one branch serves both parameters.
         gains = np.array([wb_b,1.0,wb_r],dtype=np.float32)
-        gains = gains*_mean_preserving_channel_gain(linear,gains,exposure)
+        gains = gains*_mean_preserving_gain(linear,gains,exposure,mask)
         linear = linear*gains
+        if mask is not None:
+            #A mask of mean 1.0 is still not gain neutral on this page, which is why the
+            #roteiro's mandatory normalisation is necessary and not sufficient, and why the
+            #bisection above exists. Normalising to mean 1.0 pushes the CENTRE up by
+            #1/(1 - v/3) - 25% at v 0.6 - into paper that is already at pure white and can
+            #do nothing with it, while the corners darken freely. The displayed mean
+            #therefore falls, and the scalar folded into gains puts it back. The
+            #illumination gradient carries the same asymmetry in mirror image and solves it
+            #the same way.
+            linear = linear*mask[:,:,np.newaxis]
 
     linear = linear*float(exposure)
     colour = np.clip(linear_to_srgb(linear)*255.0 + 0.5,0,255).astype(np.uint8)
