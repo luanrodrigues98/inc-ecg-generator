@@ -123,6 +123,35 @@ def build_args(config, config_path):
             "(the per-image draw is over range(1, noise + 1), empty at 0). "
             "Use augment: false to switch the stage off." % config_path)
 
+    #exposure is the one parameter with two randomisation paths, because its neutral is a
+    #gain of 1.0 rather than 0 and its jitter therefore could not be folded into the value
+    #the way --crumple_amplitude and --blur_sigma fold theirs. validate_randomize catches
+    #a key that is fixed AND randomized, but this pair is a key that is randomized here and
+    #jittered again inside run_single_file, which is a second draw on top of the first and
+    #widens the distribution past whatever range was declared.
+    if 'exposure' in randomize and args.exposure_jitter_stops > 0:
+        raise SystemExit(
+            "%s: exposure is drawn per record under randomize: and jittered again by "
+            "exposure_jitter_stops %s. Use one or the other - the randomize block is the "
+            "per-record draw, exposure_jitter_stops is for running the batch driver "
+            "without this runner." % (config_path, args.exposure_jitter_stops))
+
+    #A gain of 0 or less is meaningless, and it also reaches json.dumps: run_single_file
+    #records log2(exposure) beside the gain, which is -Infinity at 0 and NaN below it.
+    #Python writes both without complaint and every strict JSON parser rejects them, so
+    #the dataset would fail to load on the annotation rather than on the image.
+    if 'exposure' in randomize:
+        spec = randomize['exposure']
+        kind = next(iter(spec))
+        exposure_low = min(spec[kind]) if kind == 'choice' else spec[kind][0]
+    else:
+        exposure_low = args.exposure
+    if exposure_low <= 0:
+        raise SystemExit(
+            "%s: exposure must be greater than 0, got %s. 1.0 is the neutral gain and 0 "
+            "would be a black page; the annotation also records log2(exposure), which is "
+            "not representable at 0." % (config_path, exposure_low))
+
     #random_resolution ignores the randomize block and draws from range(50, resolution+1).
     #A 50 dpi ECG is unreadable and the top of that range is enormous, so the two ways of
     #varying resolution must not be mixed.

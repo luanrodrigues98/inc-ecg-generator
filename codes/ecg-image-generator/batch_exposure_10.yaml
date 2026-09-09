@@ -1,0 +1,280 @@
+# Batch of 10 ECG images from PTB-XL records100 (100 Hz, 10 s per record).
+#
+# batch_ptbxl_3000.yaml cut down to a reviewable size, plus the exposure stage added at
+# the end of stage D. Everything else is byte for byte the 3000 image config, so what
+# these 10 show is what the full batch would produce.
+#
+# Run with:
+#     .venv310/bin/python run_batch_from_config.py batch_exposure_10.yaml
+#
+# MEASURED COST at the 150-300 dpi range set below: ~2.7 s and ~11 MB per image, so this
+# run is under a minute and ~110 MB. The same config at max_num_images 3000 is ~2 h and
+# 33 GB; at the 300-600 dpi range it was ~9.5 s and ~44 MB per image, i.e. 8 h and 131 GB.
+#
+# Keys are the argparse DESTINATION names of gen_ecg_images_from_data_batch.py, not the
+# short flag spellings: rotate (not -rot), crease_angle (not -ca), handwriting_size_factor
+# (not --hws). An unknown key is a hard error, never a silent no-op. Any key left out
+# falls back to the tool's own default.
+
+# --- Corpus ------------------------------------------------------------------------
+input_directory: /home/luan-rodrigues/faculdade/inc-ecg-generator/sample-data/ptb-xl/1.0.3/records100
+# Flat: every PNG, JSON and WFDB copy lands directly here, with no mirrored subtree.
+# The record name is therefore the whole identity of a file, which is why the runner
+# refuses duplicate names.
+#
+# Absolute, so it does not follow the chdir to the generator root the way a relative path
+# would. It is its own directory under datasets/ rather than datasets/ itself, which
+# holds one directory per dataset alongside loose .parquet files - 12000 files at that
+# root would bury them.
+output_directory: out/exposure_batch10
+
+# Each record is 1000 samples at 100 Hz = 10 s, and paper_len in config.yaml is 10 s, so
+# every record yields exactly one frame and one PNG. 10 images therefore means the first
+# 10 of the 23797 available records - a prefix of the 3000, not a sample of them, so
+# every image here appears identically in the full run at the same seed.
+#
+# The runner sorts the corpus before cutting, so the chosen 3000 is a function of the
+# corpus alone, not of filesystem order - unlike a bare batch run, where os.walk's
+# unsorted directory list decides it. Per-record characteristics are keyed by record
+# name, so they hold whatever the order.
+#
+# The runner also drops records whose name it has already seen. On this corpus that
+# removes records100/union, 1998 byte-identical copies of 01000-02999 that os.walk
+# happens to reach third - without the check they would enter the set a second time and,
+# in a flat output directory, overwrite the originals.
+max_num_images: 10
+
+seed: 42
+config_file: config.yaml   # plotting constants (paper_len, layout, ticks)
+# num_leads is deliberately absent: it is declared in both parsers and never read, like
+# temperature, deterministic_rot, deterministic_temp and deterministic_crop. The lead
+# count comes from the WFDB header. Setting it here would look meaningful and do nothing.
+
+# ====================================================================================
+# PER-RECORD RANDOMISATION
+# ====================================================================================
+# Everything here is drawn once PER RECORD, from an RNG keyed by (seed, record name).
+# The batch driver already varies crumple, blur, noise, rotation, crease angle and
+# colour temperature per image on its own; what it cannot vary is layout, trace geometry
+# and resolution, which are one value for the whole run. Without this block 3000 images
+# share a single skeleton and differ only in how they are degraded.
+#
+# Three forms are accepted:
+#     choice:  [a, b, c]     one of the listed values; repeat a value to weight it
+#     uniform: [low, high]   float
+#     randint: [low, high]   integer, both ends inclusive
+#
+# A key may appear here OR as a fixed value above, never both.
+randomize:
+
+  # Layout. 4 columns is the standard 3x4 (each column a different 2.5 s window),
+  # 2 is 6x2 at 5 s, 1 is 12x1 at the full 10 s. lead_length_in_seconds is
+  # paper_len / columns, so the layout also changes how much signal each trace shows.
+  # To bias the mix towards the most common clinical layout, repeat it: [4, 4, 4, 2, 1].
+  num_columns:
+    choice: [1, 2, 4]
+
+  # Rhythm strip lead, printed full width under the grid. II is the clinical default;
+  # the others occur and are weighted below it. A lead absent from the record falls
+  # back to the first available one.
+  full_mode:
+    choice: [II, II, II, I, V1, V5]
+
+  # Grid colour, by index into the standard ECG paper palette:
+  # 1 brown, 2 pink, 3 blue, 4 green, 5 red. Weighted towards red and pink, the two
+  # that dominate real paper. This is deliberately NOT random_grid_color, which bypasses
+  # the palette entirely and samples RGB freely - that produces grids no ECG paper has.
+  standard_grid_color:
+    choice: [5, 5, 5, 5, 2, 2, 2, 1, 3, 4]
+
+  # Print resolution. Set here rather than through random_resolution, which ignores this
+  # block and draws from range(50, resolution + 1) - unreadable at the bottom and
+  # enormous at the top. 150-300 dpi spans a realistic phone-photo-to-scan range and
+  # keeps the output budget predictable.
+  resolution:
+    randint: [150, 300]
+
+  # Trace geometry, in paper millimetres and therefore invariant to the resolution above.
+  # NOTE on the 0.05 floor: thickness in pixels is thickness_mm * dpi / 25.4, so 0.05 mm
+  # is 0.6 px at 300 dpi and 1.2 px at 600 - a sub-pixel stroke that anti-aliases into a
+  # faint grey line rather than a black one. Roughly the bottom 15% of this range lands
+  # under 1.5 px at the low end of the dpi range, so a few hundred of the 3000 images
+  # will have a very faint trace. Raise the floor to 0.20 (the documented useful range)
+  # if the digitiser needs every trace solidly visible.
+  trace_thickness_mm:
+    uniform: [0.05, 0.55]     # documented useful range 0.20-0.60
+  trace_thickness_jitter:
+    uniform: [0.05, 1.0]     # stylus-pressure modulation, as a fraction of thickness
+  trace_dropout_rate:
+    uniform: [0.0, 0.8]       # dropouts per cm of arc length; range 0-1.5
+  trace_dropout_length_mm:
+    uniform: [0.1, 0.9]       # mean gap length, exponentially distributed
+
+  # Dominant wavelength of the crumple height field; the amplitude stays per-image below.
+  crumple_scale_cm:
+    uniform: [0.0, 12.0]      # range 3-15
+
+  # Camera exposure, as a linear-light gain. Range chosen from the measured sweep in
+  # out/exposure_eval/RESULTADOS.md, by EQUAL STRUCTURAL COST at the two ends: the 1 mm
+  # grid keeps 76% of its amplitude at 0.50 and 79% at 1.15.
+  #
+  # It is capped well below the 0.3-2.5 the roteiro suggests, and the reason is specific
+  # to ECG paper. Over- and underexposure do not fail the same way. Below 1.0 the trace
+  # and the grid dim together and proportionally - nothing is lost, the range is only
+  # compressed. Above 1.0 they diverge: the grid is a light red line on white, so its
+  # modulation lives in the top of the range and the highlight clip eats it first, while
+  # the black trace sits at the bottom and survives. Measured at exposure 2.5 the trace
+  # still holds 96% of its contrast and the 1 mm grid is down to 12%. That is the worst
+  # failure a digitiser can be handed: an image that still looks readable and has lost
+  # its millimetre scale, with lum_mean and contrast_rms both sitting at plausible
+  # values. 1.15 is where the grid has given up about as much as 0.50 costs it.
+  #
+  # The midpoint lands at 0.82 rather than 1.0, which is also what a real meter does: a
+  # camera metering a mostly white sheet aims at mid grey and underexposes it.
+  #
+  # One coupling the roteiro treats as absent: blur_sigma decides how much overexposure
+  # the trace can take. A defocused trace has no pure black pixel left - every dark pixel
+  # is an ink/paper mixture, and a gain pushes the paper half of it towards white. The
+  # sweep behind this range ran at blur_sigma 0.8; the 1.5 maximum below is stronger, so
+  # the ceiling here is if anything generous.
+  exposure:
+    uniform: [0.50, 1.15]     # roteiro range 0.3-2.5, narrowed on measurement
+
+  # Upstream crease/wrinkle texture, on roughly a third of the batch.
+  # Not on all of it, because the stage is degenerate: get_creased quilts with
+  # block_size 250 and num_block (1,1), so L2OverlapDiff returns 0 for every candidate
+  # and argmin always takes index 0. The result is the top-left 250x250 corner of one
+  # wrinkle photo stretched over the whole page - very strong, smooth diagonal bands
+  # that bury the trace at high amplitude. Only the choice of wrinkle file varies.
+  # The crumple stage below is the physically correct version of the same idea and is
+  # the one to lean on; this is kept as a minority texture for variety.
+  wrinkles:
+    choice: [false, false, true]
+
+# ====================================================================================
+# FIXED FOR THE BATCH
+# ====================================================================================
+
+# --- Page and layout ---------------------------------------------------------------
+pad_inches: 0
+print_header: false        # see random_print_header below for the varied version
+
+# NAME INVERSION, read carefully: remove_lead_names is action="store_false" with
+# default True, and its value is passed straight through as add_lead_names. So
+# true = lead names ARE drawn (the default), false = they are removed. The key reads
+# as the opposite of what it does.
+remove_lead_names: true
+
+# --- Annotations ---------------------------------------------------------------------
+# 2 records the distortion parameters actually applied per image (noise, crop, rotation,
+# temperature, grid colours, crumple amplitude, blur sigma, columns) on top of the
+# geometry. That per-image record is what makes a varied batch usable: without it there
+# is no way to know what any given image was rendered with.
+#
+# SIZE, measured rather than assumed: the JSON runs ~380 KB per image against several MB
+# per PNG. The annotation is a few percent of the output, so dropping to level 1 to save
+# disk trades away the parameter record for almost nothing. The PNGs are the disk cost,
+# and the levers on them are resolution and noise.
+store_config: 2
+lead_bbox: true            # NB: a true here forces crop to 0 inside the augment stage
+lead_name_bbox: true
+
+# --- Stage B, substrate: the sheet ---------------------------------------------------
+# crumple_amplitude is a MAXIMUM, drawn per image by the driver from uniform(0, value)
+# unless deterministic_crumple is set.
+crumple_amplitude: 0.6     # 0 disables the stage entirely; range 0-1.0
+illum_azimuth_deg: -1      # -1 draws one azimuth per record, keyed by record name
+                           # Shared with Stage D below: one light direction per image.
+
+# crease_angle and both crease counts are already sampled per image by the driver, since
+# the matching deterministic_* flags are left off. They apply only on the records where
+# the randomize block turned wrinkles on.
+crease_angle: 90
+num_creases_vertically: 10
+num_creases_horizontally: 10
+
+# --- Stage C, optics -----------------------------------------------------------------
+# Also a per-image MAXIMUM, drawn from uniform(0, value) unless deterministic_blur.
+# In PIXELS AT THE RENDER RESOLUTION, not in mm: unlike the trace and crumple settings
+# this one is NOT invariant to resolution, so it is a slightly different physical blur
+# at each dpi the randomize block draws.
+blur_sigma: 1.5            # range 0-3.0
+
+# --- Stage D, scene illumination -----------------------------------------------------
+# Window light or a lamp off to one side: a mask with a linear ramp along
+# illum_azimuth_deg plus the quadratic falloff of a nearby source, multiplied in linear
+# light. Also a per-image MAXIMUM, drawn from uniform(0, value) unless
+# deterministic_illum. The value is in STOPS at the 90th percentile of the falloff, not a
+# fraction and not the gain at the brightest pixel: on a page where 43% of the paper is
+# already clipped white, scaling on the peak spends the whole range where nothing can
+# show it. The mask is exponential, so it cannot reach zero and never crushes a region.
+# Blown highlights grow with the value - 43% of the sheet at 0, 56% at 0.52, 69% at 1.3.
+# That is what a real photo of white paper under a strong side light does, but if the
+# target set is more evenly lit, stay under about 0.5.
+illum_strength: 0.4        # 0 disables the stage entirely; range 0-1.3
+
+# --- Stage D, exposure ---------------------------------------------------------------
+# The gain the camera applied to the light the illumination above put on the sheet,
+# multiplied in linear light. Unlike every parameter before it this one is NOT a maximum
+# drawn from uniform(0, value): a gain is neutral at 1.0, not at 0, and its range is two
+# sided, so it is randomised here in the randomize block instead. exposure_jitter_stops
+# stays at its default of 0 and is deliberately absent - it is the per-image draw for
+# running the batch driver WITHOUT this runner, and setting both would draw twice. The
+# runner refuses that combination rather than silently widening the distribution.
+#
+# It is the only stage in the chain meant to move lum_mean. The crumple and the
+# illumination both undo their own effect on the mean, and the blur conserves energy in
+# linear light, so that the brightness of the page has a single owner.
+
+# --- Sensor stage (upstream imgaug augment) ------------------------------------------
+# Rotation, gaussian noise and crop. Requires store_config >= 1, enforced by the runner
+# rather than left to crash mid-batch.
+#
+# Colour temperature is NOT controllable: temperature and deterministic_temp are declared
+# but never read, and the stage always draws from 2000-4000 K or 10000-20000 K. That is a
+# strong per-image colour cast either way, which suits a varied batch but will fight
+# calibration work later in the chain.
+# NOTE: iaa.Affine fills the area exposed by rotation with black, so every rotated image
+# carries black triangular corners rather than a background. Keeping rotate small limits
+# how much of the frame that costs.
+augment: true
+rotate: 5                  # maximum absolute degrees; the draw is uniform in [-5, 5]
+
+# noise is a MAXIMUM, drawn per image over [1, noise].
+# DO NOT SET IT TO 0: the draw is random.choice(range(1, noise + 1)), which on an empty
+# range raises IndexError and kills the batch. 1 is the lowest usable value, and
+# augment: false is the way to switch the stage off.
+# It is also a disk lever - sensor noise defeats PNG's predictive compression.
+noise: 25
+crop: 0.01                 # inert while lead_bbox is true, see above
+
+# --- Deliberately off ------------------------------------------------------------------
+# hw_text needs the scispaCy model en_core_sci_sm, which is not in requirements.txt;
+# without it the flag raises OSError [E050]. It also loads TensorFlow per image.
+hw_text: false
+add_qr_code: false
+fully_random: false        # would randomise hw_text/wrinkles/augment per image
+
+# --- Bernoulli switches ----------------------------------------------------------------
+# These feed scipy.stats.bernoulli, which draws from numpy's global RNG. The runner seeds
+# numpy and imgaug as well as `random`, so unlike a bare batch run these stay reproducible
+# at fractional values.
+calibration_pulse: 0.95    # fraction of images carrying the calibration pulse
+random_grid_present: 1     # 1 = every image gets the grid; digitisation needs it
+# random_print_header is 0 because PTB-XL cannot fill the block. generate_template.py
+# builds the printed patient header from the COMMENT lines of the .hea file, and these
+# records have none - the header is 12 signal specs and nothing else. Verified by
+# rendering it: the block comes out as the record id plus a bare "Name:" with no value.
+# At 0.3 that would be ~900 images carrying the same empty label. Raise it only for a
+# corpus whose headers actually carry demographics.
+random_print_header: 0
+
+# random_bw MUST STAY 0. It looks like an independent black-and-white probability, but
+# any non-zero value sends standard_colours to False for EVERY image, which bypasses the
+# palette and samples grid RGB freely - losing the standard_grid_color randomisation
+# above for the whole batch, colour images included. For black-and-white images, run a
+# second batch with random_bw: 1 rather than mixing them here.
+random_bw: 0
+random_grid_color: false   # false keeps the standard palette; true samples RGB freely
+random_resolution: false   # resolution comes from the randomize block instead
+random_padding: false

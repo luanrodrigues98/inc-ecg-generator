@@ -13,6 +13,7 @@ from ImageAugmentation.augment import get_augment
 from PaperCrumple.crumple import get_crumpled, light_azimuth
 from CameraOptics.optics import get_blurred
 from SceneIllumination.illumination import get_illuminated
+from CameraPhotometry.photometry import get_exposed
 import warnings
 from helper_functions import read_config_file
 
@@ -98,6 +99,9 @@ def get_parser():
     parser.add_argument("--blur_sigma", type=float, default=0.0)
 
     parser.add_argument("--illum_strength", type=float, default=0.0)
+
+    parser.add_argument("--exposure", type=float, default=1.0)
+    parser.add_argument("--exposure_jitter_stops", type=float, default=0.0)
 
     parser.add_argument("--fully_random", action="store_true", default=False)
     parser.add_argument("--hw_text", action="store_true", default=False)
@@ -376,6 +380,38 @@ def run_single_file(args):
             # The azimuth is already recorded by the crumple block above, which resolves
             # it for both stages.
             json_dict["illum_strength"] = round(illum_strength, 4)
+
+        # Exposure: the gain the camera applied to the light the illumination above put
+        # on the sheet, multiplied in linear light. It is the only stage in the chain
+        # meant to move the page brightness - the crumple and the illumination both undo
+        # their own effect on the mean, and the blur conserves energy - so that lum_mean
+        # has a single owner.
+        # It does NOT follow the "the flag is a maximum, drawn from uniform(0, value)"
+        # idiom of -ca, -rot, --crumple_amplitude, --blur_sigma and --illum_strength,
+        # because a gain is neutral at 1.0 and not at 0, and its range is two sided.
+        # --exposure is the gain itself, which is what a bisection calibration moves;
+        # --exposure_jitter_stops is the half width of a per image draw around it, in
+        # STOPS rather than in gain, because exposure error in a real photograph is
+        # symmetric in stops and not in the multiplier. A jitter of 0 is therefore
+        # already the deterministic mode, and no --deterministic_exposure is added for
+        # it. The draw only happens when the jitter is active, so that the default leaves
+        # the global random sequence - and therefore the font, the grid colour and every
+        # augment draw below - untouched.
+        if args.exposure_jitter_stops > 0:
+            exposure = args.exposure * 2.0 ** random.uniform(
+                -args.exposure_jitter_stops, args.exposure_jitter_stops
+            )
+        else:
+            exposure = args.exposure
+
+        out = get_exposed(out, exposure=exposure)
+
+        if args.store_config == 2:
+            # Recorded in stops beside the gain: a batch varies exposure log uniformly,
+            # so the stops are the axis its distribution is actually flat on, and the
+            # figure that compares against a photographic exposure error.
+            json_dict["exposure"] = round(exposure, 4)
+            json_dict["exposure_stops"] = round(float(np.log2(exposure)), 4)
 
         if augment:
             noise = (
