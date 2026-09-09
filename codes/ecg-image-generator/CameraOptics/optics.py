@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from linear_light import srgb_to_linear, linear_to_srgb
 
 #Half width of the kernel, as a multiple of sigma. Three sigma holds 99.7% of the
 #gaussian; truncating closer leaves a step at the edge of the kernel, which on a page of
@@ -16,22 +17,6 @@ BLUR_MIN_KERNEL_SIZE = 3
 #frame back into the paper and lay a dark line just inside the edge. Replication keeps the
 #frame where it is and lets it blur outwards like everything else.
 BLUR_BORDER_MODE = cv2.BORDER_REPLICATE
-
-def srgb_to_linear(image):
-    #sRGB EOTF, exact piecewise form. Deliberately a local copy of the pair in
-    #PaperCrumple/crumple.py rather than a shared import: the shared home for linear light
-    #is a real need of the photometric increments still to come, and it belongs to the
-    #commit that introduces them, not to this one.
-    return np.where(image <= 0.04045,
-                    image/12.92,
-                    np.power((image + 0.055)/1.055,2.4)).astype(np.float32)
-
-def linear_to_srgb(image):
-    #Inverse of srgb_to_linear.
-    image = np.clip(image,0.0,1.0)
-    return np.where(image <= 0.0031308,
-                    image*12.92,
-                    1.055*np.power(image,1.0/2.4) - 0.055).astype(np.float32)
 
 def kernel_size(blur_sigma):
     #Odd by construction, since cv2 requires it.

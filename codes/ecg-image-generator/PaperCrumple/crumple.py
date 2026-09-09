@@ -3,6 +3,7 @@ import zlib
 import cv2
 import numpy as np
 from math import ceil
+from linear_light import srgb_to_linear, linear_to_srgb, mean_preserving_gain
 
 #Octaves summed into the height field, and the amplitude ratio between one octave and
 #the next. Three octaves are enough for paper: a dominant fold scale, a secondary one
@@ -40,12 +41,6 @@ CRUMPLE_INVERSE_ITERATIONS = 3
 #of entering the warp and barely depends on the displacement magnitude.
 CRUMPLE_INTERPOLATION = cv2.INTER_LANCZOS4
 
-#Bisection that keeps the shading from acting as a global gain. The gain is solved on a
-#decimated copy: the mean is a global statistic and does not need every pixel.
-CRUMPLE_GAIN_SAMPLES = 300
-CRUMPLE_GAIN_BRACKET = (0.5,4.0)
-CRUMPLE_GAIN_ITERATIONS = 24
-
 #Elevation of the light above the plane of the sheet. The azimuth is a parameter,
 #since the illumination gradient has to reuse it.
 CRUMPLE_LIGHT_ELEVATION_DEG = 40.0
@@ -63,20 +58,6 @@ CRUMPLE_LIGHT_WRAP = 0.5
 #Hard floor kept only as a safety net for the extreme tail; with the wrap in place it
 #almost never binds.
 CRUMPLE_MIN_LAMBERT = 0.02
-
-def srgb_to_linear(image):
-    #sRGB EOTF, exact piecewise form. Everything the crumple does - resampling and the
-    #shading multiply - is a physical operation on light and belongs in linear space.
-    return np.where(image <= 0.04045,
-                    image/12.92,
-                    np.power((image + 0.055)/1.055,2.4)).astype(np.float32)
-
-def linear_to_srgb(image):
-    #Inverse of srgb_to_linear.
-    image = np.clip(image,0.0,1.0)
-    return np.where(image <= 0.0031308,
-                    image*12.92,
-                    1.055*np.power(image,1.0/2.4) - 0.055).astype(np.float32)
 
 def noise_octave(shape,cell_px,rng):
     #One octave of smooth noise: white noise on a coarse grid of cell_px spacing, raised
@@ -114,33 +95,6 @@ def height_field(shape,scale_px,rng):
     if deviation <= 0:
         return None
     return field/deviation
-
-def mean_preserving_gain(linear,shading,reference):
-    #Scalar gain that holds the displayed mean of the page where it was before shading.
-    #The mask is already normalised to mean 1.0, but that is only gain neutral on a signal
-    #with headroom above and below. Here 62% of the page is paper rendered at pure white:
-    #the facets turned towards the light clip and the ones turned away darken freely, so a
-    #mean 1.0 mask still darkens the page - measured at -3.6% with the first choice of
-    #slope. Left uncorrected the crumple is a small exposure change in disguise and
-    #competes with the exposure parameter, which is the failure the calibration notes warn
-    #about.
-    #The mean is matched in DISPLAY space, which is where lum_mean is measured, and
-    #against the page as it was BEFORE the deformation: resampling a trace this thin
-    #lightens it slightly, and that belongs to the stage too. Taking the reference from
-    #the warped page instead would leave a fixed brightness step between amplitude 0 and
-    #any amplitude above it.
-    stride = max(int(max(linear.shape[:2])/CRUMPLE_GAIN_SAMPLES),1)
-    sample = linear[::stride,::stride]
-    target = float(linear_to_srgb(reference[::stride,::stride]).mean())
-    shaded = sample*shading[::stride,::stride,np.newaxis]
-    low,high = CRUMPLE_GAIN_BRACKET
-    for _ in range(CRUMPLE_GAIN_ITERATIONS):
-        gain = (low + high)/2.0
-        if float(linear_to_srgb(shaded*gain).mean()) < target:
-            low = gain
-        else:
-            high = gain
-    return (low + high)/2.0
 
 def edge_taper(shape,margin_px):
     #Fade the displacement to zero at the border of the sheet. A large displacement asks
