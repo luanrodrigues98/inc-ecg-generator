@@ -13,7 +13,7 @@ from ImageAugmentation.augment import get_augment
 from PaperCrumple.crumple import get_crumpled, light_azimuth
 from CameraOptics.optics import get_blurred
 from SceneIllumination.illumination import get_illuminated
-from CameraPhotometry.photometry import get_exposed
+from CameraPhotometry.photometry import get_exposed, daylight_gains, mired_to_cct_k
 import warnings
 from helper_functions import read_config_file
 
@@ -102,6 +102,10 @@ def get_parser():
 
     parser.add_argument("--exposure", type=float, default=1.0)
     parser.add_argument("--exposure_jitter_stops", type=float, default=0.0)
+
+    parser.add_argument("--wb_r", type=float, default=1.0)
+    parser.add_argument("--wb_b", type=float, default=1.0)
+    parser.add_argument("--wb_mired_jitter", type=float, default=0.0)
 
     parser.add_argument("--fully_random", action="store_true", default=False)
     parser.add_argument("--hw_text", action="store_true", default=False)
@@ -404,7 +408,42 @@ def run_single_file(args):
         else:
             exposure = args.exposure
 
-        out = get_exposed(out, exposure=exposure)
+        # White balance: the colour of the light, as two per-channel gains in linear
+        # light. It is FUSED into the exposure stage rather than given one of its own,
+        # because every stage boundary here is a uint8 PNG and a separate stage would
+        # spend half a level of quantisation on a cast that is only about ten levels
+        # wide. Physically the two are one diagonal gain matrix anyway, which is what the
+        # roteiro means by "applied alongside exposure".
+        # --wb_r and --wb_b are the gains themselves, and they are what a bisection
+        # calibration moves. --wb_mired_jitter is the half width of a per image draw
+        # around them, in MIREDS - reciprocal megakelvin - rather than in kelvin, for the
+        # same reason the exposure jitter is in stops: 500 K is an enormous shift at
+        # 3000 K and invisible at 15000 K, while a mired is roughly the same perceived
+        # step everywhere.
+        # The draw moves the pair ALONG THE DAYLIGHT LOCUS, which is the point of it. The
+        # roteiro requires the two gains be sampled in a correlated way and not
+        # independently, because a real illuminant has one degree of freedom: warm light
+        # is high r AND low b, and the (high r, high b) corner two independent uniforms
+        # would produce is a lamp that does not exist. This is also why the parameter is
+        # NOT randomised through the runner's randomize: block, which draws every key on
+        # its own - the inversion from --exposure is deliberate and run_batch_from_config
+        # refuses the combination rather than silently decorrelating the pair.
+        # A jitter of 0 is already the deterministic mode, so no --deterministic_wb is
+        # added, exactly as none was added for the exposure. The draw only happens when
+        # the jitter is active, so that the default leaves the global random sequence -
+        # and therefore every augment draw below - untouched.
+        if args.wb_mired_jitter > 0:
+            wb_mired_offset = random.uniform(
+                -args.wb_mired_jitter, args.wb_mired_jitter
+            )
+            jitter_r, jitter_b = daylight_gains(wb_mired_offset)
+        else:
+            wb_mired_offset = 0.0
+            jitter_r, jitter_b = 1.0, 1.0
+        wb_r = args.wb_r * jitter_r
+        wb_b = args.wb_b * jitter_b
+
+        out = get_exposed(out, exposure=exposure, wb_r=wb_r, wb_b=wb_b)
 
         if args.store_config == 2:
             # Recorded in stops beside the gain: a batch varies exposure log uniformly,
@@ -412,6 +451,17 @@ def run_single_file(args):
             # figure that compares against a photographic exposure error.
             json_dict["exposure"] = round(exposure, 4)
             json_dict["exposure_stops"] = round(float(np.log2(exposure)), 4)
+            json_dict["wb_r"] = round(wb_r, 4)
+            json_dict["wb_b"] = round(wb_b, 4)
+            # The mired offset and its kelvin equivalent describe the DRAW, which is on
+            # the locus by construction, and they are recorded only when there was one.
+            # A pair set by hand is a free point in the (r, b) plane and generally sits
+            # off the locus, where there is no single colour temperature to report:
+            # projecting a 2D point onto a 1D curve would fill the annotations with a
+            # plausible-looking number that is not true of the image.
+            if args.wb_mired_jitter > 0:
+                json_dict["wb_mired_offset"] = round(wb_mired_offset, 3)
+                json_dict["wb_cct_k"] = round(mired_to_cct_k(wb_mired_offset), 1)
 
         if augment:
             noise = (
@@ -428,12 +478,33 @@ def run_single_file(args):
                     crop = args.crop
             else:
                 crop = 0
-            blue_temp = random.choice((True, False))
-
-            if blue_temp:
-                temp = random.choice(range(2000, 4000))
+            # --temperature and --deterministic_temp were declared by upstream and never
+            # read, which put an UNCONTROLLED colour temperature at the end of the chain:
+            # measured, iaa.ChangeColorTemperature turns white paper into [255,137,18] at
+            # 2000 K and [168,197,255] at 20000 K, and the draw below picks one of those
+            # two extremes with even odds and nothing in between. Across the ten images of
+            # the previous batch that produced a bimodal spread of 75 units in lab_b, while
+            # wb_r and wb_b over their whole documented range move it by about 5.
+            # Two stages cannot own the colour of one photograph, for the same reason
+            # lum_mean has a single owner and the crumple and the illumination share one
+            # light azimuth. Reading the flag hands that ownership to the white balance
+            # above, where it is a physical gain in linear light on the daylight locus
+            # rather than a coin toss between orange and blue.
+            # The default is False, so the draw below is untouched and the whole chain
+            # still reproduces bit for bit with the flag left off. Note that switching it
+            # ON consumes two fewer values from the global random sequence, so the
+            # rotation, crop and noise of get_augment shift with it - which is expected,
+            # and the reason a batch run with deterministic_temp is not comparable image
+            # by image with one run without it.
+            if args.deterministic_temp:
+                temp = args.temperature
             else:
-                temp = random.choice(range(10000, 20000))
+                blue_temp = random.choice((True, False))
+
+                if blue_temp:
+                    temp = random.choice(range(2000, 4000))
+                else:
+                    temp = random.choice(range(10000, 20000))
             rotate = args.rotate
             out = get_augment(
                 out,

@@ -84,6 +84,10 @@ def get_parser():
     parser.add_argument('--exposure',type=float,default=1.0)
     parser.add_argument('--exposure_jitter_stops',type=float,default=0.0)
 
+    parser.add_argument('--wb_r',type=float,default=1.0)
+    parser.add_argument('--wb_b',type=float,default=1.0)
+    parser.add_argument('--wb_mired_jitter',type=float,default=0.0)
+
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)
     parser.add_argument('--wrinkles',action='store_true',default=False)

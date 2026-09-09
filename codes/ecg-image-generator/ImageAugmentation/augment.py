@@ -50,12 +50,19 @@ def get_augment(input_file,output_directory,rotate=25,noise=25,crop=0.01,tempera
     rot = random.randint(-rotate, rotate)
     crop_sample = random.uniform(0, crop)
     #Augment in a sequential manner. Create an augmentation object
-    seq = iaa.Sequential([
-          iaa.Affine(rotate=rot),
-          iaa.AdditiveGaussianNoise(scale=(noise, noise)),
-          iaa.Crop(percent=crop_sample),
-          iaa.ChangeColorTemperature(temperature)
-          ])
+    #A temperature of 0 or less REMOVES the colour temperature step instead of passing a
+    #neutral kelvin to it, and the difference matters: imgaug's table has no exactly
+    #neutral entry. Measured, 6500 K - the closest there is - still leaves white paper at
+    #[255,249,253] and mid grey at [128,125,127], a residual of about 2%, which is the same
+    #order as a wb_b of 1.02 and would go on competing with the white balance stage for
+    #ownership of the colour cast. Off is the only setting that is actually neutral.
+    #0 is also not a colour temperature, so it cannot collide with a value a caller means.
+    steps = [iaa.Affine(rotate=rot),
+             iaa.AdditiveGaussianNoise(scale=(noise, noise)),
+             iaa.Crop(percent=crop_sample)]
+    if temperature > 0:
+        steps.append(iaa.ChangeColorTemperature(temperature))
+    seq = iaa.Sequential(steps)
     
     images_aug = seq(images=images)
 

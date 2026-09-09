@@ -152,6 +152,47 @@ def build_args(config, config_path):
             "would be a black page; the annotation also records log2(exposure), which is "
             "not representable at 0." % (config_path, exposure_low))
 
+    #The white balance is the one parameter whose per-record draw MUST NOT go through the
+    #randomize block, and this guard is the only one here that refuses a key outright
+    #rather than refusing a combination. The reason is in the roteiro: wb_r and wb_b have
+    #to be sampled in a CORRELATED way, because a real illuminant has one degree of
+    #freedom - warm light is high r AND low b - and randomize: draws every key from its own
+    #independent uniform, which would produce the (high r, high b) corner, a lamp that is
+    #simultaneously warm and cool and does not exist. wb_mired_jitter is the correlated
+    #draw, along the daylight locus, and it is inside run_single_file.
+    #wb_mired_jitter itself is refused for a different reason: drawing the HALF WIDTH per
+    #record and then drawing again inside it is the same double draw the exposure guard
+    #below rejects, and it widens the distribution past whatever range was declared.
+    white_balance_keys = sorted(set(randomize) & {'wb_r', 'wb_b', 'wb_mired_jitter'})
+    if white_balance_keys:
+        raise SystemExit(
+            "%s: randomize: %s cannot be drawn here. randomize: samples every key "
+            "independently, and wb_r/wb_b must move together along the illuminant locus "
+            "(warm light is high r AND low b). Set wb_r and wb_b as fixed values and use "
+            "wb_mired_jitter for the per-record draw, which is correlated by construction."
+            % (config_path, ', '.join(white_balance_keys)))
+
+    #A gain of 0 or less on a colour channel removes that channel from the image, which is
+    #not a white balance at any setting. Refused for the same reason as the exposure below.
+    for key in ('wb_r', 'wb_b'):
+        if getattr(args, key) <= 0:
+            raise SystemExit(
+                "%s: %s must be greater than 0, got %s. 1.0 is the neutral gain and 0 "
+                "would delete the channel." % (config_path, key, getattr(args, key)))
+
+    #deterministic_temp was inert upstream, so its companion --temperature kept a default
+    #of 40000 that nothing ever read. Reading the flag makes that default live, and 40000 K
+    #is the blue end of imgaug's table - a page the colour of a computer screen. Nobody who
+    #switches the flag on means that, so ask for the value explicitly. Use temperature 0 to
+    #switch the colour temperature step off entirely, which is what hands ownership of the
+    #cast to wb_r and wb_b.
+    if args.deterministic_temp and args.temperature == 40000:
+        raise SystemExit(
+            "%s: deterministic_temp is on but temperature is still the inert upstream "
+            "default of 40000, which is the blue extreme of imgaug's table. Set "
+            "temperature explicitly - 0 switches the colour temperature step off and "
+            "leaves the cast to wb_r/wb_b." % config_path)
+
     #random_resolution ignores the randomize block and draws from range(50, resolution+1).
     #A 50 dpi ECG is unreadable and the top of that range is enormous, so the two ways of
     #varying resolution must not be mixed.
