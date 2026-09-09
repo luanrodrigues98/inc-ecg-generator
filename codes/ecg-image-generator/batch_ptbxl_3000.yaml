@@ -1,13 +1,17 @@
-# Batch of 3000 ECG images from PTB-XL records100 (100 Hz, 10 s per record).
+# Batch of 4000 ECG images from PTB-XL records100 (100 Hz, 10 s per record).
 #
 # Run with:
 #     .venv310/bin/python run_batch_from_config.py batch_ptbxl_3000.yaml
 #
-# MEASURED COST, from an 8-image run at the CURRENT settings (resolution 300-600):
-# ~9.5 s and ~44 MB per image, so budget roughly 8 HOURS and 131 GB for the full 3000.
-# Both figures scale hard with the resolution range below - at 150-300 dpi the same
-# batch measured ~2.7 s and ~11 MB per image, so ~2 h and 33 GB. Check free space before
-# starting: 131 GB is the single biggest consequence of the dpi range.
+# Stage D of the roteiro is COMPLETE here: exposure, white balance and the vignette are
+# all set below. Everything through the illumination gradient was already in place.
+#
+# MEASURED COST, from the ten-image run in out/vignette_eval at the 150-300 dpi range set
+# below and with the whole chain active: ~3.6 s and ~11.9 MB per image (PNG plus JSON),
+# so budget roughly 4 HOURS and 48 GB for the full 4000. The previous header quoted the
+# 300-600 dpi figures - ~9.5 s and ~44 MB per image - while the resolution block below
+# already said 150-300; at 300-600 the same 4000 would be ~10.5 h and 176 GB. Check free
+# space before starting: the dpi range is the single biggest lever on both numbers.
 #
 # Keys are the argparse DESTINATION names of gen_ecg_images_from_data_batch.py, not the
 # short flag spellings: rotate (not -rot), crease_angle (not -ca), handwriting_size_factor
@@ -24,7 +28,10 @@ input_directory: /home/luan-rodrigues/faculdade/inc-ecg-generator/sample-data/pt
 # would. It is its own directory under datasets/ rather than datasets/ itself, which
 # holds one directory per dataset alongside loose .parquet files - 12000 files at that
 # root would bury them.
-output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_3000
+# NOT the ptbxl_synthetic_3000 directory the previous run filled: those 3000 images came
+# from a generator with no exposure, no white balance and no vignette, and the runner
+# writes flat, so a rerun would interleave two different datasets under one name.
+output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_4000
 
 # Each record is 1000 samples at 100 Hz = 10 s, and paper_len in config.yaml is 10 s, so
 # every record yields exactly one frame and one PNG. 3000 images therefore means the
@@ -39,7 +46,7 @@ output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbx
 # removes records100/union, 1998 byte-identical copies of 01000-02999 that os.walk
 # happens to reach third - without the check they would enter the set a second time and,
 # in a flat output directory, overwrite the originals.
-max_num_images: 3000
+max_num_images: 4000
 
 seed: 42
 config_file: config.yaml   # plotting constants (paper_len, layout, ticks)
@@ -70,12 +77,6 @@ randomize:
   # To bias the mix towards the most common clinical layout, repeat it: [4, 4, 4, 2, 1].
   num_columns:
     choice: [1, 2, 4]
-
-  # Rhythm strip lead, printed full width under the grid. II is the clinical default;
-  # the others occur and are weighted below it. A lead absent from the record falls
-  # back to the first available one.
-  full_mode:
-    choice: [II, II, II, I, V1, V5]
 
   # Grid colour, by index into the standard ECG paper palette:
   # 1 brown, 2 pink, 3 blue, 4 green, 5 red. Weighted towards red and pink, the two
@@ -110,6 +111,48 @@ randomize:
   # Dominant wavelength of the crumple height field; the amplitude stays per-image below.
   crumple_scale_cm:
     uniform: [0.0, 12.0]      # range 3-15
+
+  # Camera exposure, as a linear-light gain. Range chosen from the measured sweep in
+  # out/exposure_eval/RESULTADOS.md, by EQUAL STRUCTURAL COST at the two ends: the 1 mm
+  # grid keeps 76% of its amplitude at 0.50 and 79% at 1.15.
+  #
+  # It is capped well below the 0.3-2.5 the roteiro suggests, and the reason is specific
+  # to ECG paper. Over- and underexposure do not fail the same way. Below 1.0 the trace
+  # and the grid dim together and proportionally - nothing is lost, the range is only
+  # compressed. Above 1.0 they diverge: the grid is a light red line on white, so its
+  # modulation lives in the top of the range and the highlight clip eats it first, while
+  # the black trace sits at the bottom and survives. Measured at exposure 2.5 the trace
+  # still holds 96% of its contrast and the 1 mm grid is down to 12%. That is the worst
+  # failure a digitiser can be handed: an image that still looks readable and has lost
+  # its millimetre scale, with lum_mean and contrast_rms both sitting at plausible
+  # values. 1.15 is where the grid has given up about as much as 0.50 costs it.
+  #
+  # The midpoint lands at 0.82 rather than 1.0, which is also what a real meter does: a
+  # camera metering a mostly white sheet aims at mid grey and underexposes it.
+  #
+  # One coupling the roteiro treats as absent: blur_sigma decides how much overexposure
+  # the trace can take. A defocused trace has no pure black pixel left - every dark pixel
+  # is an ink/paper mixture, and a gain pushes the paper half of it towards white. The
+  # sweep behind this range ran at blur_sigma 0.8; the 1.5 maximum below is stronger, so
+  # the ceiling here is if anything generous.
+  exposure:
+    uniform: [0.50, 1.15]     # roteiro range 0.3-2.5, narrowed on measurement
+
+  # Radial luminance falloff of the lens - the last parameter of stage D. Drawn HERE and
+  # not left to the per-image uniform(0, max) draw that crumple_amplitude, blur_sigma and
+  # illum_strength use, because that draw has no lower bound: half a batch would come out
+  # with a vignette too faint to see, which is the wrong sample to evaluate a new stage on.
+  # Choosing this path REQUIRES deterministic_vignette: true below, and the runner refuses
+  # the pair without it - otherwise the value drawn here becomes the maximum of a second
+  # draw inside run_single_file and the product of two uniforms piles up near zero.
+  #
+  # The range is measured, not guessed. Centre-minus-corner on the rendered page, at
+  # exposure 0.82 (tables in out/vignette_eval/RESULTADOS.md):
+  #     v 0.15 -> 15 levels    v 0.30 -> 30    v 0.45 -> 47    v 0.60 -> 66
+  # 0.10 is where the falloff stops being invisible against the grid, and 0.55 stays
+  # inside the roteiro's 0-0.6 and short of the 2.0% highlight clipping that v 0.60 adds.
+  vignette:
+    uniform: [0.10, 0.55]     # roteiro range 0-0.6
 
   # Upstream crease/wrinkle texture, on roughly a third of the batch.
   # Not on all of it, because the stage is degenerate: get_creased quilts with
@@ -184,18 +227,109 @@ blur_sigma: 1.5            # range 0-3.0
 # target set is more evenly lit, stay under about 0.5.
 illum_strength: 0.4        # 0 disables the stage entirely; range 0-1.3
 
+# --- Stage D, exposure ---------------------------------------------------------------
+# The gain the camera applied to the light the illumination above put on the sheet,
+# multiplied in linear light. Unlike every parameter before it this one is NOT a maximum
+# drawn from uniform(0, value): a gain is neutral at 1.0, not at 0, and its range is two
+# sided, so it is randomised here in the randomize block instead. exposure_jitter_stops
+# stays at its default of 0 and is deliberately absent - it is the per-image draw for
+# running the batch driver WITHOUT this runner, and setting both would draw twice. The
+# runner refuses that combination rather than silently widening the distribution.
+#
+# It is the only stage in the chain meant to move lum_mean. The crumple and the
+# illumination both undo their own effect on the mean, and the blur conserves energy in
+# linear light, so that the brightness of the page has a single owner - and so does the
+# white balance below, which corrects its own effect on the luminance for the same reason.
+
+# --- Stage D, white balance ----------------------------------------------------------
+# The colour of the light, as two per-channel gains in linear light, fused into the
+# exposure stage because every stage boundary here is a uint8 PNG and the whole cast being
+# modelled is only about ten levels wide.
+#
+# THE PAIR IS NOT IN THE randomize BLOCK, AND THAT IS THE POINT. randomize: draws every
+# key from its own independent uniform, and the roteiro forbids exactly that for these two:
+# a real illuminant has ONE degree of freedom, warm light being high r AND low b, so
+# independent draws would produce the (high r, high b) corner - a lamp that is
+# simultaneously warm and cool. wb_mired_jitter is the correlated draw, along the CIE
+# daylight locus, made inside run_single_file. The runner refuses wb_r, wb_b or
+# wb_mired_jitter under randomize: rather than silently decorrelating them.
+# This inverts the arrangement used for exposure one block up, where the randomize block
+# is the per-record draw and the jitter is for running the driver without this runner.
+# The inversion is deliberate and is forced by the correlation requirement.
+#
+# The draw is uniform in MIREDS (reciprocal megakelvin), not in kelvin: 500 K is an
+# enormous shift at 3000 K and invisible at 15000 K, while a mired is roughly the same
+# perceived step everywhere. Same reasoning that put the exposure jitter in stops.
+#
+# RANGE, from the measured sweep in out/wb_eval/RESULTADOS.md against the corpus figures
+# in feat/distribution-params (calibration/attribute_map.py). The real corpus is WARM ON
+# ONE SIDE ONLY - wb_b_over_g p05-p95 is 0.925-1.046, centred just below 1 - and the sweep
+# maps those three figures onto -17.3, +4.2 and +26.1 mireds. So the centre sits 4 mireds
+# warm of D65 rather than on it, and the half width is 22.
+#   wb_r/wb_b below are daylight_gains(+4 mired) = 6339 K, the centre.
+#   +/- 22 mireds spans 7366 K to 5563 K, i.e. net gains wb_r 0.933-1.110, wb_b 0.845-1.120.
+# Both stay inside the roteiro box of 0.85-1.20, and the grid is still unambiguously
+# red/pink at both ends - checked on the two box corners in the sweep.
+#
+# ONE COUPLING THE ROTEIRO DOES NOT MODEL, and it is the finding of this increment:
+# highlight clipping destroys white balance authority, ASYMMETRICALLY. Measured at +/- 30
+# mireds, the shift in lab_b is +/- 10.4 at exposure 0.82 (no clipping), but only -3.0/+5.3
+# at exposure 1.15 and -0.9/+1.4 at 1.60. Cooling means RAISING blue on paper that is
+# already at white and has nowhere to go; warming means lowering it, which always works.
+# The exposure range above reaches 1.15, so the brightest images of this batch carry a
+# visibly weaker cast than the darkest ones. That is physically correct - it is also why
+# the real corpus is warm on one side only - but it means the two parameters are coupled
+# and the achieved spread is narrower than the sweep alone predicts.
+wb_r: 1.0160               # daylight_gains(+4 mired); roteiro range 0.85-1.20
+wb_b: 0.9747               # daylight_gains(+4 mired); roteiro range 0.85-1.20
+wb_mired_jitter: 22        # half width of the per-record draw along the daylight locus
+
+# --- Stage D, vignette ---------------------------------------------------------------
+# Radial luminance falloff of the lens, the last parameter of stage D. The strength itself
+# is in the randomize block above; this switch is what makes that legal. It turns OFF the
+# per-image uniform(0, max) draw inside run_single_file, so the randomize block becomes the
+# single per-record draw. Without it the two compound - a maximum drawn per record, then a
+# second draw inside it - and the product of two uniforms piles up near zero, so most of
+# the batch would carry almost no vignette whatever range was declared. The runner refuses
+# the pair rather than letting that through.
+#
+# Fused into the exposure stage rather than given one of its own, because linear_to_srgb
+# clips at 1.0 and every stage boundary is therefore a clip: applied afterwards it would
+# darken pixels the exposure had already flattened onto 255, and the 1 mm grid living in
+# those near-white values does not survive it. Measured at exposure 1.15 with 59.6% of the
+# page clipped, a separate stage kept only 73% of the corner grid amplitude the fused one
+# delivers. Tables in out/vignette_eval/RESULTADOS.md.
+deterministic_vignette: true
+
+# Rhythm strip lead, printed full width under the grid: ALWAYS II, which is the clinical
+# default and the lead a rhythm strip is actually printed in. Previously drawn from
+# choice: [II, II, II, I, V1, V5], which put a quarter of the batch on a lead no real
+# twelve-lead printout uses for the strip. A record without II falls back to its first
+# available lead, so this is a preference and not a guarantee.
+# Fixed rather than a one-element choice: under randomize:, because random.choice of a
+# unit list still goes through _randbelow(1) - getrandbits(1) in a loop until it comes up
+# 0, a variable number of draws. A fixed key consumes nothing from the per-record stream.
+full_mode: II
+
 # --- Sensor stage (upstream imgaug augment) ------------------------------------------
 # Rotation, gaussian noise and crop. Requires store_config >= 1, enforced by the runner
 # rather than left to crash mid-batch.
 #
-# Colour temperature is NOT controllable: temperature and deterministic_temp are declared
-# but never read, and the stage always draws from 2000-4000 K or 10000-20000 K. That is a
-# strong per-image colour cast either way, which suits a varied batch but will fight
-# calibration work later in the chain.
+# Colour temperature IS controllable now, and is switched OFF here. temperature and
+# deterministic_temp were declared and never read upstream; the white balance increment
+# made them live. Left on, the stage draws 2000-4000 K or 10000-20000 K with even odds and
+# nothing between, which measured as a bimodal 75 unit spread in lab_b across ten images -
+# against about 10 units for the whole documented range of wb_r/wb_b above. Two stages
+# cannot own the colour of one photograph, so it belongs to the white balance.
+# temperature 0 REMOVES the step rather than setting a neutral kelvin, because imgaug's
+# table has no neutral entry: at 6500 K, the closest there is, white paper still comes out
+# [255, 249, 253].
 # NOTE: iaa.Affine fills the area exposed by rotation with black, so every rotated image
 # carries black triangular corners rather than a background. Keeping rotate small limits
 # how much of the frame that costs.
 augment: true
+deterministic_temp: true   # stops the 2000-4000 / 10000-20000 K draw; see above
+temperature: 0             # 0 removes the step entirely, leaving the cast to wb_r/wb_b
 rotate: 5                  # maximum absolute degrees; the draw is uniform in [-5, 5]
 
 # noise is a MAXIMUM, drawn per image over [1, noise].

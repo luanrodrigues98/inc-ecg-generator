@@ -288,14 +288,26 @@ illum_strength: 0.4        # 0 disables the stage entirely; range 0-1.3
 # visibly weaker cast than the darkest ones. That is physically correct - it is also why
 # the real corpus is warm on one side only - but it means the two parameters are coupled
 # and the achieved spread is narrower than the sweep alone predicts.
-# Required by the vignette entry in randomize: above - it switches OFF the per-image
-# uniform(0, max) draw inside run_single_file so that the randomize block is the single
-# per-record draw. Without it the two compound and the runner refuses the config.
-deterministic_vignette: true
-
 wb_r: 1.0160               # daylight_gains(+4 mired); roteiro range 0.85-1.20
 wb_b: 0.9747               # daylight_gains(+4 mired); roteiro range 0.85-1.20
 wb_mired_jitter: 22        # half width of the per-record draw along the daylight locus
+
+# --- Stage D, vignette ---------------------------------------------------------------
+# Radial luminance falloff of the lens, the last parameter of stage D. The strength itself
+# is in the randomize block above; this switch is what makes that legal. It turns OFF the
+# per-image uniform(0, max) draw inside run_single_file, so the randomize block becomes the
+# single per-record draw. Without it the two compound - a maximum drawn per record, then a
+# second draw inside it - and the product of two uniforms piles up near zero, so most of
+# the batch would carry almost no vignette whatever range was declared. The runner refuses
+# the pair rather than letting that through.
+#
+# Fused into the exposure stage rather than given one of its own, because linear_to_srgb
+# clips at 1.0 and every stage boundary is therefore a clip: applied afterwards it would
+# darken pixels the exposure had already flattened onto 255, and the 1 mm grid living in
+# those near-white values does not survive it. Measured at exposure 1.15 with 59.6% of the
+# page clipped, a separate stage kept only 73% of the corner grid amplitude the fused one
+# delivers. Tables in out/vignette_eval/RESULTADOS.md.
+deterministic_vignette: true
 
 # --- Sensor stage (upstream imgaug augment) ------------------------------------------
 # Rotation, gaussian noise and crop. Requires store_config >= 1, enforced by the runner
