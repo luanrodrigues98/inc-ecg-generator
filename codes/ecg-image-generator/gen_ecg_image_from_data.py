@@ -14,6 +14,7 @@ from PaperCrumple.crumple import get_crumpled, light_azimuth
 from CameraOptics.optics import get_blurred
 from SceneIllumination.illumination import get_illuminated
 from CameraPhotometry.photometry import get_exposed, daylight_gains, mired_to_cct_k
+from CameraSensor.sensor import get_resampled
 import warnings
 from helper_functions import read_config_file
 
@@ -124,6 +125,10 @@ def get_parser():
     parser.add_argument("--hue_rotation", type=float, default=0.0)
     parser.add_argument("--hue_rotation_jitter_deg", type=float, default=0.0)
 
+    parser.add_argument("--supersample", type=int, default=1)
+    parser.add_argument("--output_width", type=int, default=0)
+    parser.add_argument("--output_height", type=int, default=0)
+
     parser.add_argument("--fully_random", action="store_true", default=False)
     parser.add_argument("--hw_text", action="store_true", default=False)
     parser.add_argument("--wrinkles", action="store_true", default=False)
@@ -171,6 +176,21 @@ def run_single_file(args):
         else args.pad_inches
     )
 
+    # Supersampling: the whole chain up to the sensor is rendered at a multiple of the
+    # delivered resolution and integrated back down in get_resampled, immediately before
+    # the sensor noise. This page is the case that needs it - a 0.30 mm trace is 1.8 px at
+    # 300 dpi and 0.9 px at 150, and the 1 mm minor grid is 1.2 to 2.4 px, so rendering
+    # straight at the delivered resolution puts every line at or under the sampling limit.
+    # --resolution KEEPS MEANING THE OUTPUT dpi. Only the render moves, so the 150-300
+    # range in the batch configs still describes the images that come out and every earlier
+    # evaluation under out/ stays comparable.
+    # Everything the chain expresses in MILLIMETRES of paper - trace_thickness_mm,
+    # trace_dropout_length_mm, crumple_scale_cm - converts through whatever dpi it is
+    # handed and therefore follows this for free. blur_sigma is the one exception and is
+    # scaled explicitly below.
+    supersample = max(int(args.supersample), 1)
+    render_resolution = resolution * supersample
+
     papersize = ""
     lead = args.remove_lead_names
 
@@ -203,7 +223,7 @@ def run_single_file(args):
         store_configs=args.store_config,
         store_text_bbox=args.lead_name_bbox,
         output_directory=args.output_directory,
-        resolution=resolution,
+        resolution=render_resolution,
         papersize=papersize,
         add_lead_names=lead,
         add_dc_pulse=bernoulli_dc,
@@ -335,7 +355,7 @@ def run_single_file(args):
         if crumple_amplitude > 0:
             out = get_crumpled(
                 out,
-                resolution=resolution,
+                resolution=render_resolution,
                 crumple_amplitude=crumple_amplitude,
                 crumple_scale_cm=args.crumple_scale_cm,
                 illum_azimuth_deg=illum_azimuth_deg,
@@ -363,10 +383,21 @@ def run_single_file(args):
             blur_sigma = args.blur_sigma
 
         if blur_sigma > 0:
-            out = get_blurred(out, blur_sigma=blur_sigma)
+            # Multiplied by the supersample factor for the render, and ONLY for the
+            # render. blur_sigma is the single parameter of this chain denominated in
+            # pixels rather than in millimetres of paper - optics.py says so explicitly,
+            # because a defocus is a property of the camera and is measured on its sensor
+            # - so it is the single parameter that does not follow the render resolution
+            # on its own. Left unscaled, the same flag would be a THIRD of the blur at
+            # supersample 3 once the page is integrated back down, and every figure the
+            # earlier evaluations calibrated against would silently change meaning.
+            # The flag therefore keeps meaning px OF THE DELIVERED IMAGE, which is also
+            # what makes blur_sigma_mm below invariant: the sigma and the resolution it is
+            # divided by are both the output ones.
+            out = get_blurred(out, blur_sigma=blur_sigma * supersample)
 
         if args.store_config == 2:
-            # blur_sigma is in px at the render resolution, which is what the parameter
+            # blur_sigma is in px at the OUTPUT resolution, which is what the parameter
             # means and what calibration bisects on. The mm equivalent is recorded
             # beside it so that annotations from renders made at different dpi can still
             # be compared in paper space.
@@ -649,6 +680,36 @@ def run_single_file(args):
             # than radians because degrees are the unit the flag, the range and the
             # roteiro all use.
             json_dict["hue_rotation"] = round(hue_rotation, 4)
+
+        # The sampling grid of the sensor, closing stage E-13. The page has been rendered,
+        # deformed, defocused and graded at render_resolution; here it is integrated down
+        # with INTER_AREA onto the pixels that are actually delivered.
+        # POSITION IS THE WHOLE POINT and it is fixed at both ends. After every stage that
+        # belongs to the scene and to the lens, because those act on a continuous optical
+        # image and the sensor is what discretises it. BEFORE get_augment, because the
+        # gaussian noise in there originates ON this grid: noise added at render
+        # resolution and then downscaled by 3 comes out with a third of the amplitude and
+        # a correlation length it should not have, and sensor_noise, the next increment,
+        # would be calibrating against an artefact of the supersample factor.
+        # Before get_augment for a second, mechanical reason: it reads h, w from the image
+        # and uses [h/2, w/2] as the rotation origin for the annotations, so the pixels and
+        # the stored geometry have to already agree on the frame.
+        # At supersample 1 with no explicit output size this is a no op that does not even
+        # reopen the file - see get_resampled.
+        out = get_resampled(out, supersample=supersample,
+                            output_width=args.output_width,
+                            output_height=args.output_height,
+                            json_dict=json_dict)
+
+        if args.store_config == 2:
+            # The factor the page was oversampled by, and the size it was delivered at.
+            # width and height are already recorded by the render and rewritten by the
+            # stage above, so what is added here is the provenance the delivered figures
+            # no longer carry: at what dpi the page was actually drawn before it was
+            # integrated down. Two images of identical size and very different edge
+            # statistics differ by exactly this number.
+            json_dict["supersample"] = supersample
+            json_dict["render_resolution"] = render_resolution
 
         if augment:
             noise = (

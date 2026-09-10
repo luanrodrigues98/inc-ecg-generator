@@ -1,35 +1,29 @@
-# Batch of 4000 ECG images from PTB-XL records100 (100 Hz, 10 s per record).
+# Ten-image evaluation batch for stage E-13 (supersample / output_width / output_height),
+# from PTB-XL records100.
 #
 # Run with:
-#     .venv310/bin/python run_batch_from_config.py batch_ptbxl_3000.yaml
+#     .venv310/bin/python run_batch_from_config.py batch_supersample_10.yaml
 #
-# Stage D of the roteiro is CLOSED and stage E is OPEN: as of increment 13 the page is
-# rendered above the resolution it is delivered at and integrated back down onto the
-# sensor grid. Exposure, white balance, the vignette, the contrast curve, the black/white
-# clipping points, the CIELAB chroma scaling and the a*/b* hue rotation are all set below,
-# and everything through the illumination gradient was already in place. The next
-# parameters in the roteiro are increment 14, sensor_noise, and increment 15, jpeg_q.
+# This is batch_ptbxl_3000.yaml with two keys changed - output_directory and
+# max_num_images - and NOTHING else, the same relationship batch_hue_10.yaml,
+# batch_saturation_10.yaml and batch_clipping_10.yaml have to it. The whole production
+# chain is active, augment and imgaug sensor noise included, so the ten images are a
+# SAMPLE OF THE REAL BATCH rather than an isolated demonstration of the new parameter.
 #
-# MEASURED COST, and increment 13 changed it substantially. At supersample 3 the render
-# runs at 450-900 dpi for a page delivered at 150-300, and one image at the worst corner
-# of that range - 300 dpi out, 900 dpi in - was measured at 36 s wall clock. The ten-image
-# run in out/supersample_eval took 3 min 13 s over the whole 150-300 range, i.e. 19.3 s per
-# image and a 12.4 GB peak RSS, so budget roughly 21 HOURS for the full 4000 against the
-# ~4 h the same batch took at supersample 1. The OUTPUT budget is unchanged at ~48 GB, because the delivered
-# resolution did not move; what grew is the transient - the intermediate PNG reaches
-# ~100 MB at the top of the range and is rewritten by each of crumple, blur, illumination
-# and photometry.
+# The isolated validation - the same page at supersample 1, 2, 3 and 4 delivered at one
+# fixed size, and the distance of each from a 900 dpi render treated as ground truth - is
+# the separate harness in out/supersample_eval/sweep_harness.py and its tables in
+# RESULTADOS.md. That harness renders WITHOUT augment on purpose: iaa.Affine resamples
+# after the downscale point and iaa.Crop defaults to keep_size=True, so both would depress
+# the sharpness statistics for reasons that have nothing to do with this stage.
 #
-# THE 12.4 GB IS THE NUMBER TO WATCH. The runner is serial, so that is the peak for the
-# whole process, but it is over half the memory available on this machine (22 GB free of
-# 30): do not run a second batch, or anything else large, alongside it. supersample 2 halves the wall clock
-# and the peak, and out/supersample_eval/RESULTADOS.md measures it as no worse than 3.
+# COST, measured: at supersample 3 the render runs at 450-900 dpi for a page delivered at
+# 150-300, which is about 20-36 s per image against ~3.6 s at supersample 1. Ten images is
+# therefore a handful of minutes rather than the ~35 s the earlier ten-image batches took.
+# Peak RSS at the worst corner is 12.6 GB.
 #
-# Keys are the argparse DESTINATION names of gen_ecg_images_from_data_batch.py, not the
-# short flag spellings: rotate (not -rot), crease_angle (not -ca), handwriting_size_factor
-# (not --hws). An unknown key is a hard error, never a silent no-op. Any key left out
-# falls back to the tool's own default.
-
+# Output is FLAT: the ten PNGs, their JSON annotations and the WFDB copies land directly
+# in out/supersample_eval/, with no subdirectory per record or per parameter.
 # --- Corpus ------------------------------------------------------------------------
 input_directory: /home/luan-rodrigues/faculdade/inc-ecg-generator/sample-data/ptb-xl/1.0.3/records100
 # Flat: every PNG, JSON and WFDB copy lands directly here, with no mirrored subtree.
@@ -43,7 +37,7 @@ input_directory: /home/luan-rodrigues/faculdade/inc-ecg-generator/sample-data/pt
 # NOT the ptbxl_synthetic_3000 directory the previous run filled: those 3000 images came
 # from a generator with no exposure, no white balance and no vignette, and the runner
 # writes flat, so a rerun would interleave two different datasets under one name.
-output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_4000
+output_directory: out/supersample_eval
 
 # Each record is 1000 samples at 100 Hz = 10 s, and paper_len in config.yaml is 10 s, so
 # every record yields exactly one frame and one PNG. 3000 images therefore means the
@@ -58,7 +52,7 @@ output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbx
 # removes records100/union, 1998 byte-identical copies of 01000-02999 that os.walk
 # happens to reach third - without the check they would enter the set a second time and,
 # in a flat output directory, overwrite the originals.
-max_num_images: 4000
+max_num_images: 10
 
 seed: 42
 config_file: config.yaml   # plotting constants (paper_len, layout, ticks)

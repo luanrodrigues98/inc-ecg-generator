@@ -36,6 +36,7 @@ from helper_functions import find_records
 from gen_ecg_images_from_data_batch import get_parser
 from gen_ecg_image_from_data import run_single_file
 from CameraPhotometry.photometry import LEVELS_MIN_SPAN, HUE_ROTATION_MAX
+from CameraSensor.sensor import SUPERSAMPLE_MAX
 
 REQUIRED_KEYS = ('input_directory', 'output_directory')
 DRAWS = ('choice', 'uniform', 'randint')
@@ -423,6 +424,46 @@ def build_args(config, config_path):
             "%s: random_resolution draws from range(50, resolution + 1) and ignores "
             "randomize: resolution. Set random_resolution: false to use the range you "
             "declared." % config_path)
+
+    #Stage E, the sensor sampling grid. supersample multiplies the RENDER resolution;
+    #resolution keeps meaning the output dpi. argparse type=int accepts 0 and -1 happily,
+    #and a supersample of 0 is a render at 0 dpi, which either raises somewhere inside Agg
+    #or produces a figure with no pixels. The ceiling is a cost bound rather than a
+    #physical one: the render grows with the square of the factor.
+    #Checked through _bounds so a fixed value and a randomize range are both covered, and
+    #a range is checked at BOTH ends.
+    for bound in _bounds('supersample'):
+        if int(bound) != bound or bound < 1 or bound > SUPERSAMPLE_MAX:
+            raise SystemExit(
+                "%s: supersample is %s and must be a whole number in [1, %d]. It "
+                "multiplies the render resolution, so the render cost grows with its "
+                "square; 1 switches the stage off." % (config_path, bound, SUPERSAMPLE_MAX))
+
+    #output_width and output_height are ONE degree of freedom, not two. The paper aspect
+    #ratio is fixed by the standard: a vertical millimetre is 0.1 mV and a horizontal one
+    #is 40 ms, so scaling the two axes by different factors changes mV per pixel and
+    #seconds per pixel by different amounts and the page stops being a faithful plot.
+    #randomize: draws every key from its own independent stream, so drawing both here is
+    #precisely the way to produce that pair. Either one alone is fine - get_resampled
+    #derives the other from the render. This is the wb_r/wb_b refusal for the same reason:
+    #a quantity with one degree of freedom must not be sampled as two.
+    output_size_keys = sorted(set(randomize) & {'output_width', 'output_height'})
+    if len(output_size_keys) == 2:
+        raise SystemExit(
+            "%s: randomize: output_width and output_height cannot both be drawn here. "
+            "randomize: samples every key independently, and an independent pair gives an "
+            "aspect ratio that stretches the mV and the seconds axes by different factors. "
+            "Randomize one of the two and leave the other at 0 - the render's own aspect "
+            "ratio supplies it." % config_path)
+
+    #Three ways of setting the delivered size must not be mixed, the same reason
+    #random_resolution and randomize: resolution are refused together above.
+    if args.random_resolution and (args.output_width > 0 or args.output_height > 0
+                                   or output_size_keys):
+        raise SystemExit(
+            "%s: random_resolution and output_width/output_height are two ways of setting "
+            "the delivered size and the second wins, which makes the first silently inert. "
+            "Set random_resolution: false." % config_path)
 
     return args, randomize
 

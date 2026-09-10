@@ -105,6 +105,10 @@ def get_parser():
     parser.add_argument('--hue_rotation',type=float,default=0.0)
     parser.add_argument('--hue_rotation_jitter_deg',type=float,default=0.0)
 
+    parser.add_argument('--supersample',type=int,default=1)
+    parser.add_argument('--output_width',type=int,default=0)
+    parser.add_argument('--output_height',type=int,default=0)
+
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)
     parser.add_argument('--wrinkles',action='store_true',default=False)
