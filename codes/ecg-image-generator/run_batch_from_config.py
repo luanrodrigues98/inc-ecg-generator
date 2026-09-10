@@ -217,6 +217,36 @@ def build_args(config, config_path):
                 "1 the corners are black before the mask is normalised; the roteiro's "
                 "own calibration bracket stops at 0.9." % (config_path, bound))
 
+    #contrast has the same two randomisation paths as the exposure, and for the same
+    #reason: its neutral is a multiplier of 1.0 rather than 0, so the jitter could not be
+    #folded into the value the way --crumple_amplitude and --blur_sigma fold theirs. The
+    #pair below is a key randomized here AND jittered again inside run_single_file, which
+    #is a second draw on top of the first and widens the distribution past whatever range
+    #was declared. Unlike the vignette this does not bias the result towards an end - the
+    #jitter is symmetric in log2 - but the declared range still stops being the range.
+    if 'contrast' in randomize and args.contrast_jitter_log2 > 0:
+        raise SystemExit(
+            "%s: contrast is drawn per record under randomize: and jittered again by "
+            "contrast_jitter_log2 %s. Use one or the other - the randomize block is the "
+            "per-record draw, contrast_jitter_log2 is for running the batch driver "
+            "without this runner." % (config_path, args.contrast_jitter_log2))
+
+    #A contrast of 0 flattens the page onto a single value and a negative one inverts it.
+    #Refused here as well as in get_exposed, so a bad range fails on the config rather than
+    #partway through a batch that has already written images. Checked on the randomize
+    #range too, since that is where the value actually comes from.
+    if 'contrast' in randomize:
+        spec = randomize['contrast']
+        kind = next(iter(spec))
+        contrast_low = min(spec[kind]) if kind == 'choice' else spec[kind][0]
+    else:
+        contrast_low = args.contrast
+    if contrast_low <= 0:
+        raise SystemExit(
+            "%s: contrast must be greater than 0, got %s. 1.0 is the neutral curve, 0 "
+            "would flatten the page onto a single value and a negative value would invert "
+            "it." % (config_path, contrast_low))
+
     #deterministic_temp was inert upstream, so its companion --temperature kept a default
     #of 40000 that nothing ever read. Reading the flag makes that default live, and 40000 K
     #is the blue end of imgaug's table - a page the colour of a computer screen. Nobody who

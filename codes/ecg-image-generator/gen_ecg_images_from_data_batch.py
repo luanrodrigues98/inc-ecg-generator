@@ -91,6 +91,9 @@ def get_parser():
 
     parser.add_argument('--vignette',type=float,default=0.0)
 
+    parser.add_argument('--contrast',type=float,default=1.0)
+    parser.add_argument('--contrast_jitter_log2',type=float,default=0.0)
+
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)
     parser.add_argument('--wrinkles',action='store_true',default=False)

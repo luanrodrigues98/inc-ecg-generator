@@ -40,6 +40,30 @@ VIGNETTE_MIN_GAIN = 0.05
 #stops at 0.9.
 VIGNETTE_MAX = 1.0
 
+#Neutral for the tone curve, and it is a MULTIPLIER again after the vignette went back to
+#zero. Contrast scales the DISTANCE of every pixel from an anchor, so 1.0 leaves that
+#distance alone and 0 would collapse the page onto a single value. The consequence is the
+#one every parameter in this chain carries - at the neutral value the stage must not touch
+#the file at all.
+CONTRAST_NEUTRAL = 1.0
+
+#The anchor of the curve: mid grey, exactly as the roteiro writes it. It stays at 0.5
+#rather than being moved to the page mean, and the mean is restored by the offset solved
+#in _mean_preserving_offset instead. The two are the SAME CURVE - a + (in - a)*c equals
+#0.5 + (in - 0.5)*c + d with d = (a - 0.5)*(1 - c) - but only the offset form can be
+#solved, for the reason given there.
+CONTRAST_ANCHOR = 0.5
+
+#Half width of the bracket the offset is solved in, placed AROUND THE CLOSED FORM rather
+#than fixed at the origin the way GAIN_BRACKET is. The root moves with both the contrast
+#and the page mean - at contrast 4.0, the top of the roteiro's calibration bracket, on a
+#page of mean 0.9 it sits at -1.2 - so a fixed interval covering that would have to be
+#enormous, and a bisection in a needlessly wide bracket spends its iterations on the part
+#of the range it already knows is wrong. Centred on the closed form, this half width is
+#the room the CLIPPING needs, which is the only thing the closed form does not account
+#for.
+CONTRAST_OFFSET_HALF_WIDTH = 0.5
+
 #D65 in mireds, the reciprocal megakelvin 1e6/T. Colour temperature is drawn on THIS axis
 #and not in kelvin, for the same reason exposure is drawn in stops and not in gain: 500 K
 #is an enormous shift at 3000 K and invisible at 15000 K, while a mired is roughly the
@@ -215,9 +239,67 @@ def _mean_preserving_gain(linear,gains,exposure,mask=None):
             high = gain
     return (low + high)/2.0
 
+def _mean_preserving_offset(display,contrast):
+    #Additive offset in DISPLAY space that holds the luminance weighted mean of the page
+    #across the tone curve. Same bisection, same constants and the same reason as
+    #_mean_preserving_gain above: without it the contrast is a brightness change in
+    #disguise and competes with the exposure for lum_mean, which is the oscillation the
+    #calibration notes blame for 85% median error.
+    #
+    #WHY THIS STAGE NEEDS ONE AT ALL, WHEN THE ROTEIRO SAYS IT DOES NOT. The roteiro
+    #anchors the curve at mid grey and argues that anchoring anywhere else shifts lum_mean
+    #and breaks the already calibrated exposure. That is true of an image whose mean IS mid
+    #grey. This page is most of the way to white - measured 0.857 in display space at
+    #exposure 0.82, since about 62% of it is paper - so the mid grey anchor moves lum_mean
+    #by -14.7% at contrast 0.6 and +16.7% at 1.8, and at 1.8 it drives 68% of the sheet
+    #into pure white and takes the millimetre grid with it. The roteiro's own acceptance
+    #criterion for this same parameter is 2%. The two halves of that section cannot both
+    #hold on an ECG page, and it is the anchor that does not survive the contact: solving
+    #a + (in - a)*c for a constant mean gives a = mean, in closed form. The curve stays
+    #literal and the offset below is what puts the mean back.
+    #
+    #THE OFFSET IS THE SOLVED VARIABLE, NOT THE ANCHOR, and that is not a matter of taste.
+    #d out/d a = 1 - c, which CHANGES SIGN at c = 1, so a bisection on the anchor would run
+    #backwards over half the documented range. d out/d offset = +1 everywhere, so the loop
+    #below keeps exactly the comparison the other bisections in this codebase use.
+    #
+    #SEQUENTIAL WITH _mean_preserving_gain AND STILL EXACT, which the white balance and the
+    #vignette were not - those two had to share a single solve. The difference is that they
+    #are multiplies inside the same nonlinearity, so neither is exact with the other
+    #present, while this one acts on the finished display array and matches the mean of
+    #that same array. The two invariants compose, and exposure stays the single owner of
+    #lum_mean.
+    stride = max(int(max(display.shape[:2])/GAIN_SAMPLES),1)
+    sample = display[::stride,::stride]
+    target = float((sample*LUMINANCE_WEIGHTS_BGR).sum(axis=2).mean())
+
+    #Closed form, exact wherever the curve clips nothing, obtained by setting the mean of
+    #0.5 + (in - 0.5)*c + d equal to the mean of in. It is the bracket's centre and it is
+    #also the analytic self test of this increment - the role 1 - v/3 plays for the
+    #vignette mask. Where it disagrees with the solved value, the difference IS the
+    #clipping, and that is the figure the evaluation reports.
+    offset = (1.0 - float(contrast))*(target - CONTRAST_ANCHOR)
+    low = offset - CONTRAST_OFFSET_HALF_WIDTH
+    high = offset + CONTRAST_OFFSET_HALF_WIDTH
+
+    #The curve without the offset, computed once outside the loop: the bisection only
+    #moves the constant added to it.
+    curve = CONTRAST_ANCHOR + (sample - CONTRAST_ANCHOR)*float(contrast)
+    for _ in range(GAIN_ITERATIONS):
+        offset = (low + high)/2.0
+        #Clipped inside the loop, because the clip is the whole reason the closed form is
+        #not the answer. Matching [0,1] here is matching what the uint8 cast does to the
+        #full image afterwards.
+        shifted = np.clip(curve + offset,0.0,1.0)
+        if float((shifted*LUMINANCE_WEIGHTS_BGR).sum(axis=2).mean()) < target:
+            low = offset
+        else:
+            high = offset
+    return (low + high)/2.0
+
 #Main function to expose the photograph
 def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
-                vignette=VIGNETTE_NEUTRAL):
+                vignette=VIGNETTE_NEUTRAL,contrast=CONTRAST_NEUTRAL):
     #Exposure of the camera: the scalar gain between the light that reached the sensor and
     #the value recorded for it. It multiplies IN LINEAR LIGHT, which is what makes it a
     #gain at all - the same factor applied to the sRGB values would be a power law on
@@ -274,11 +356,21 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
         raise ValueError('vignette must be in [0, 1), got %r '
                          '(0 is the neutral falloff; at 1 the corners are black before '
                          'the mask is normalised)' % (vignette,))
-    #The third term is not decoration. Without it --vignette would be silently inert
-    #whenever exposure and white balance are both at their neutrals, which is a flag that
-    #parses and does nothing - the upstream failure this codebase refuses everywhere else.
+    #A contrast of 0 collapses the page onto a single value and a negative one INVERTS it,
+    #into a white trace on dark paper. Neither is a tone curve. Refused rather than clamped,
+    #for the reason the exposure guard above gives. There is no upper bound, exactly as
+    #there is none on the exposure: a high contrast is a hard curve, not a meaningless one,
+    #and the roteiro's own calibration bracket for it runs to 4.0.
+    if contrast <= 0:
+        raise ValueError('contrast must be greater than 0, got %r '
+                         '(1.0 is the neutral curve; 0 would flatten the page onto a '
+                         'single value)' % (contrast,))
+    #The last two terms are not decoration. Without them --vignette and --contrast would be
+    #silently inert whenever the parameters before them sit at their neutrals, which is a
+    #flag that parses and does nothing - the upstream failure this codebase refuses
+    #everywhere else.
     if (exposure == EXPOSURE_NEUTRAL and wb_r == WB_NEUTRAL and wb_b == WB_NEUTRAL
-            and vignette == VIGNETTE_NEUTRAL):
+            and vignette == VIGNETTE_NEUTRAL and contrast == CONTRAST_NEUTRAL):
         return filename
 
     image = cv2.imread(filename,cv2.IMREAD_UNCHANGED)
@@ -340,7 +432,20 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
             linear = linear*mask[:,:,np.newaxis]
 
     linear = linear*float(exposure)
-    colour = np.clip(linear_to_srgb(linear)*255.0 + 0.5,0,255).astype(np.uint8)
+
+    #The tone curve, and it is the first thing in this stage that is NOT a multiply in
+    #linear light. It belongs in DISPLAY space, which is where the roteiro puts it and
+    #where contrast_rms is measured, so it lands between the sRGB conversion and the
+    #quantisation. That makes the roteiro's "after the sRGB conversion, before clipping"
+    #literal here rather than aspirational: the clip folded into the uint8 cast on the last
+    #line is the only one left after it.
+    #Being nonlinear is also why it does not join the fused multiplier above and why its
+    #mean is restored by a second, sequential solve - see _mean_preserving_offset.
+    display = linear_to_srgb(linear)
+    if contrast != CONTRAST_NEUTRAL:
+        display = (CONTRAST_ANCHOR + (display - CONTRAST_ANCHOR)*float(contrast)
+                   + _mean_preserving_offset(display,contrast))
+    colour = np.clip(display*255.0 + 0.5,0,255).astype(np.uint8)
 
     if alpha is not None:
         image = np.dstack([colour,alpha])

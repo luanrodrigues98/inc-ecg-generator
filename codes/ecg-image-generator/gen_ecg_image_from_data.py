@@ -110,6 +110,9 @@ def get_parser():
 
     parser.add_argument("--vignette", type=float, default=0.0)
 
+    parser.add_argument("--contrast", type=float, default=1.0)
+    parser.add_argument("--contrast_jitter_log2", type=float, default=0.0)
+
     parser.add_argument("--fully_random", action="store_true", default=False)
     parser.add_argument("--hw_text", action="store_true", default=False)
     parser.add_argument("--wrinkles", action="store_true", default=False)
@@ -464,8 +467,33 @@ def run_single_file(args):
         else:
             vignette = args.vignette
 
+        # Contrast: the tone curve, and the first stage of the chain that acts in
+        # DISPLAY space rather than in linear light - which is where the roteiro puts
+        # it, and where contrast_rms is measured. It is fused into get_exposed with the
+        # three above so that the curve meets the [0,1] clip of the uint8 boundary once
+        # instead of twice.
+        # It follows the jitter idiom of --exposure and the white balance and not the
+        # uniform(0, max) idiom of --vignette, by the rule this codebase already states:
+        # which idiom applies is decided by the NEUTRAL VALUE, not by taste. Contrast is
+        # neutral at 1.0 and its range runs to both sides of it, so uniform(0, max) does
+        # not cover it and there is no --deterministic_contrast - a jitter of 0 is
+        # already the deterministic mode, exactly as for the exposure.
+        # The draw is in LOG2 of the contrast rather than in the multiplier itself, for
+        # the same reason the exposure jitter is in stops and the white balance jitter in
+        # mireds: the roteiro's own 0.6-1.8 range is nearly symmetric in log2
+        # (-0.74 / +0.85) and badly asymmetric in the multiplier, so a symmetric draw on
+        # the multiplier would spend most of its width on one side of neutral.
+        # Drawn only when the jitter is active, so the default leaves the global random
+        # sequence - and therefore every augment draw below - untouched.
+        if args.contrast_jitter_log2 > 0:
+            contrast = args.contrast * 2.0 ** random.uniform(
+                -args.contrast_jitter_log2, args.contrast_jitter_log2
+            )
+        else:
+            contrast = args.contrast
+
         out = get_exposed(out, exposure=exposure, wb_r=wb_r, wb_b=wb_b,
-                          vignette=vignette)
+                          vignette=vignette, contrast=contrast)
 
         if args.store_config == 2:
             # Recorded in stops beside the gain: a batch varies exposure log uniformly,
@@ -490,6 +518,11 @@ def run_single_file(args):
             # anyway - the mask is 1/(1 - v/3) at the centre and (1 - v)/(1 - v/3) at
             # the corners, so a reader with this number has the whole falloff.
             json_dict["vignette"] = round(vignette, 4)
+            # The value applied, following the vignette. The offset the stage solves to
+            # hold lum_mean across the curve is not recorded beside it: it is a function
+            # of this number and the page mean, and it is the evaluation sweep - not the
+            # per-image annotation - that has a use for it.
+            json_dict["contrast"] = round(contrast, 4)
 
         if augment:
             noise = (
