@@ -91,6 +91,16 @@ WHITE_POINT_NEUTRAL = 1.0
 #pair can be produced by two INDEPENDENT draws, so nothing upstream rules it out.
 LEVELS_MIN_SPAN = 0.05
 
+#Neutral for the chroma scaling, and it is a MULTIPLIER again after the two clipping points
+#had their neutrals at the two ENDS of the range. saturation scales the DISTANCE of every
+#pixel from the neutral axis of CIELAB, exactly as the contrast scales its distance from an
+#anchor, so 1.0 leaves that distance alone. The consequence is the one every parameter in
+#this chain carries - at the neutral value the stage must not touch the file at all, and
+#here that is a stronger requirement than usual: the BGR -> Lab -> BGR round trip is not a
+#per pixel identity in float32, so a stage that ran it unconditionally would fail the bit
+#for bit regression at its own neutral setting.
+SATURATION_NEUTRAL = 1.0
+
 #D65 in mireds, the reciprocal megakelvin 1e6/T. Colour temperature is drawn on THIS axis
 #and not in kelvin, for the same reason exposure is drawn in stops and not in gain: 500 K
 #is an enormous shift at 3000 K and invisible at 15000 K, while a mired is roughly the
@@ -327,7 +337,8 @@ def _mean_preserving_offset(display,contrast):
 #Main function to expose the photograph
 def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
                 vignette=VIGNETTE_NEUTRAL,contrast=CONTRAST_NEUTRAL,
-                black_point=BLACK_POINT_NEUTRAL,white_point=WHITE_POINT_NEUTRAL):
+                black_point=BLACK_POINT_NEUTRAL,white_point=WHITE_POINT_NEUTRAL,
+                saturation=SATURATION_NEUTRAL):
     #Exposure of the camera: the scalar gain between the light that reached the sensor and
     #the value recorded for it. It multiplies IN LINEAR LIGHT, which is what makes it a
     #gain at all - the same factor applied to the sRGB values would be a power law on
@@ -420,6 +431,22 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
                          'levels adjustment.'
                          % (LEVELS_MIN_SPAN,white_point - black_point,
                             black_point,white_point))
+    #Below zero the chroma is not desaturated, it is INVERTED: a negative scale sends every
+    #colour to its complement, so the red grid comes out cyan. Refused rather than clamped,
+    #for the reason the exposure guard above gives.
+    #ZERO IS ALLOWED, and it is the one place this module parts company with the contrast
+    #guard a few lines up, which refuses 0. The difference is what each collapses. A contrast
+    #of 0 flattens the whole page onto a single value and destroys the image; a saturation of
+    #0 collapses only the chroma and leaves every bit of the luminance structure - the grid,
+    #the trace and the text are all still there. That is a black and white photograph of an
+    #ECG, which is a real thing the corpus contains, and refusing it would be refusing a
+    #legitimate setting. There is no upper bound either, exactly as there is none on the
+    #exposure and the contrast: the roteiro's own calibration bracket for this one runs to 4.0.
+    if saturation < 0:
+        raise ValueError('saturation must be at least 0, got %r '
+                         '(1.0 is the neutral chroma and 0 is a black and white page; '
+                         'a negative scale would send every colour to its complement)'
+                         % (saturation,))
     #The trailing terms are not decoration. Without them --vignette, --contrast,
     #--black_point and --white_point would be silently inert whenever the parameters before
     #them sit at their neutrals, which is a flag that parses and does nothing - the upstream
@@ -427,7 +454,8 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
     if (exposure == EXPOSURE_NEUTRAL and wb_r == WB_NEUTRAL and wb_b == WB_NEUTRAL
             and vignette == VIGNETTE_NEUTRAL and contrast == CONTRAST_NEUTRAL
             and black_point == BLACK_POINT_NEUTRAL
-            and white_point == WHITE_POINT_NEUTRAL):
+            and white_point == WHITE_POINT_NEUTRAL
+            and saturation == SATURATION_NEUTRAL):
         return filename
 
     image = cv2.imread(filename,cv2.IMREAD_UNCHANGED)
@@ -537,6 +565,79 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
     if black_point != BLACK_POINT_NEUTRAL or white_point != WHITE_POINT_NEUTRAL:
         display = np.clip((display - float(black_point))
                           /(float(white_point) - float(black_point)),0.0,1.0)
+
+    #Chroma scaling - the roteiro's saturation - and the LAST thing this stage does, after
+    #the clipping points and immediately before the uint8 cast. That is the roteiro's own
+    #order for the chain: tone curve, then clipping, then colour.
+    #
+    #IN CIELAB AND NOT IN HSV, which the roteiro requires by name, and on this page the
+    #difference is not academic - it decides who owns lum_mean. Scaling S in HSV moves the
+    #LIGHTNESS along with the chroma, because S is a ratio of channel spread to channel
+    #maximum and changing it changes the channel maximum. Measured on this render, the same
+    #two scales applied both ways:
+    #
+    #                  L* of the page      lum_mean
+    #    CIELAB 0.5    -0.10%              -0.63%
+    #    HSV    0.5    +2.70%              +2.70%
+    #    CIELAB 1.5    -0.14%              -0.42%
+    #    HSV    1.5    -2.54%              -3.00%
+    #
+    #So the HSV form is a 3% brightness change wearing a colour control, which would put a
+    #SECOND OWNER on lum_mean and reopen exactly the oscillation this whole chain is built to
+    #avoid - the one the calibration notes blame for 85% median error. The Lab form leaves L
+    #alone by construction: the multiply touches a and b only, and L is not a function of
+    #either. What little movement is left in the table above is the gamut clip on the way
+    #back, discussed below.
+    #
+    #WHAT DOES NOT MOVE IS L, NOT "THE PAPER" - and the distinction is worth stating because
+    #it is easy to overclaim here. A pixel exactly on the neutral axis has a = b = 0 and is
+    #fixed entirely, measured: the probe triples (1,1,1), (0.5,0.5,0.5) and (0,0,0) all
+    #return a = b = 0.000. But the paper of THIS page is not on that axis once the white
+    #balance has tinted it, so its cast is scaled like everything else - measured under a
+    #warm illuminant (wb_r 1.15, wb_b 0.87) the paper chroma goes 9.91 -> 14.89 at
+    #saturation 1.5. That is correct behaviour and not a leak: a camera's saturation control
+    #does amplify a colour cast, and the alternative would be a stage that decides for itself
+    #which pixels count as paper. What holds in every one of those cases is the L column:
+    #the paper's L* moves by less than 0.2% across the whole range.
+    #
+    #NO MEAN PRESERVING SOLVE, and unlike the black and white point above that is not a
+    #concession - it is the property the Lab choice BUYS. Every earlier stage ends in a
+    #bisection so that exposure stays the single owner of lum_mean; here the invariant is
+    #algebraic instead: scaling a and b leaves L untouched by construction, so there is
+    #nothing for a solve to restore and adding one would only duplicate what the colour space
+    #already guarantees. What the algebra does not cover is the GAMUT: at high chroma the
+    #scaled colour can leave the sRGB cube and the clip on the way back does move L a little.
+    #That is measured and reported in out/saturation_eval/RESULTADOS.md rather than corrected,
+    #because correcting it would put a second owner on the page brightness.
+    #
+    #THE CLIP AND THE CAST BEFORE THE CONVERSION ARE A CONTRACT GUARD, AND BOTH ARE
+    #CURRENTLY DEFENSIVE - said plainly, because the tempting version of this comment claims
+    #they prevent a crash and that claim does not survive being checked.
+    #
+    #display really is NOT inside [0,1] at this line. linear_to_srgb clips, but the contrast
+    #curve runs after it and its solved offset is not clipped, and the levels block just above
+    #sits behind a guard that does not fire at the neutral pair. Measured at contrast 1.35 on
+    #this page the span is [-0.296, +0.938], with 0.37% of the pixels below zero.
+    #What was then MEASURED rather than assumed: cv2 4.6 clamps out of range input inside the
+    #conversion - the probe (-0.30,-0.30,-0.30) returns L = 0 and (1.05,1.05,1.05) returns
+    #L = 100, no NaN - so on this build the explicit clip changes exactly 0 pixels of the
+    #finished page. The cast is the same story: CV_64F is rejected outright by cvtColor
+    #("depth is 6"), but nothing in this chain produces float64 - linear_to_srgb returns
+    #float32 and every operation after it is float32 against a python scalar, which numpy
+    #keeps at float32.
+    #Kept anyway, and not out of superstition. That clamping is an undocumented internal
+    #detail of one OpenCV version rather than a promise of the API, and the dtype invariant
+    #holds only as long as nobody writes a numpy float64 literal into the contrast or levels
+    #expressions above. Two cheap lines make the precondition of this conversion explicit
+    #instead of inherited. What they cost is nothing measurable; what they buy is that this
+    #stage cannot be broken from a distance.
+    if saturation != SATURATION_NEUTRAL:
+        display = np.clip(display,0.0,1.0).astype(np.float32)
+        #L in [0,100], a and b in [-127,127] centred on zero - the float32 convention, not
+        #the 8 bit one, which stores a + 128 and would need the offset removed first.
+        lab = cv2.cvtColor(display,cv2.COLOR_BGR2Lab)
+        lab[:,:,1:] *= float(saturation)
+        display = np.clip(cv2.cvtColor(lab,cv2.COLOR_Lab2BGR),0.0,1.0)
 
     colour = np.clip(display*255.0 + 0.5,0,255).astype(np.uint8)
 

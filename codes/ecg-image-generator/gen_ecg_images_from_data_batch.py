@@ -99,6 +99,9 @@ def get_parser():
     parser.add_argument('--black_point',type=float,default=0.0)
     parser.add_argument('--white_point',type=float,default=1.0)
 
+    parser.add_argument('--saturation',type=float,default=1.0)
+    parser.add_argument('--saturation_jitter_log2',type=float,default=0.0)
+
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)
     parser.add_argument('--wrinkles',action='store_true',default=False)

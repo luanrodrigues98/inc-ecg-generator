@@ -118,6 +118,9 @@ def get_parser():
     parser.add_argument("--black_point", type=float, default=0.0)
     parser.add_argument("--white_point", type=float, default=1.0)
 
+    parser.add_argument("--saturation", type=float, default=1.0)
+    parser.add_argument("--saturation_jitter_log2", type=float, default=0.0)
+
     parser.add_argument("--fully_random", action="store_true", default=False)
     parser.add_argument("--hw_text", action="store_true", default=False)
     parser.add_argument("--wrinkles", action="store_true", default=False)
@@ -529,9 +532,41 @@ def run_single_file(args):
         else:
             white_point = args.white_point
 
+        # Chroma scaling: the saturation, and the last thing get_exposed does - after the
+        # clipping points, immediately before the uint8 cast, which is the roteiro's own
+        # order for the chain (tone curve, then clipping, then colour).
+        # Scaled in CIELAB and not in HSV, which the roteiro requires by name: a and b are
+        # zero on the neutral axis, so the paper white the exposure and the white balance
+        # just settled stays exactly where it was at every value of this parameter, and only
+        # the pixels that already carry colour move. On an ECG sheet that is the grid.
+        # It is also the first stage in this chain since the crumple that needs NO mean
+        # preserving solve, and for a reason rather than by omission: scaling a and b leaves
+        # L untouched by construction, so exposure keeps sole ownership of lum_mean without
+        # anything being restored. The full argument is in CameraPhotometry/photometry.py.
+        #
+        # It follows the jitter idiom of --exposure and --contrast and not the uniform(0,
+        # max) idiom of --vignette and the two clipping points, by the rule this codebase
+        # already states: which idiom applies is decided by the NEUTRAL VALUE, not by taste.
+        # Saturation is neutral at 1.0 and its range runs to both sides of it, so
+        # uniform(0, max) does not cover it and there is no --deterministic_saturation - a
+        # jitter of 0 is already the deterministic mode.
+        # The draw is in LOG2 of the scale rather than in the multiplier itself, for the same
+        # reason the exposure jitter is in stops and the contrast jitter in log2: chroma
+        # scaling is multiplicative, so half and double are the same size of step and a
+        # symmetric draw on the multiplier would not be symmetric on the thing being scaled.
+        # Drawn only when the jitter is active, so the default leaves the global random
+        # sequence - and therefore every augment draw below - untouched.
+        if args.saturation_jitter_log2 > 0:
+            saturation = args.saturation * 2.0 ** random.uniform(
+                -args.saturation_jitter_log2, args.saturation_jitter_log2
+            )
+        else:
+            saturation = args.saturation
+
         out = get_exposed(out, exposure=exposure, wb_r=wb_r, wb_b=wb_b,
                           vignette=vignette, contrast=contrast,
-                          black_point=black_point, white_point=white_point)
+                          black_point=black_point, white_point=white_point,
+                          saturation=saturation)
 
         if args.store_config == 2:
             # Recorded in stops beside the gain: a batch varies exposure log uniformly,
@@ -567,6 +602,12 @@ def run_single_file(args):
             # has the whole curve, including the display gain 1/(wp - bp).
             json_dict["black_point"] = round(black_point, 4)
             json_dict["white_point"] = round(white_point, 4)
+            # The scale applied, following the clipping points and closing stage D. No
+            # derived figure beside it: unlike the exposure there is no other axis this one
+            # is naturally flat on, and what it implies is closed form anyway - every a* and
+            # b* in the image is this multiple of what the render produced, and the neutral
+            # axis is fixed, so a reader with this number has the whole transform.
+            json_dict["saturation"] = round(saturation, 4)
 
         if augment:
             noise = (

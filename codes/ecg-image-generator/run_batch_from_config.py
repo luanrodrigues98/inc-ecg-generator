@@ -248,6 +248,45 @@ def build_args(config, config_path):
             "would flatten the page onto a single value and a negative value would invert "
             "it." % (config_path, contrast_low))
 
+    #saturation has the same two randomisation paths as the exposure and the contrast, and for
+    #the same reason: its neutral is a multiplier of 1.0 rather than 0, so the jitter could not
+    #be folded into the value the way --crumple_amplitude and --blur_sigma fold theirs. The
+    #pair below is a key randomized here AND jittered again inside run_single_file, which is a
+    #second draw on top of the first and widens the distribution past whatever range was
+    #declared.
+    #
+    #NOTE WHAT IS *NOT* REFUSED HERE. Unlike vignette, black_point and white_point, this key
+    #needs no matching deterministic_saturation to be legal under randomize:. Those three are
+    #one sided with a neutral at an end, so run_single_file draws uniform(0, value) INSIDE
+    #them and the two draws compound into a biased distribution. Saturation has no such inner
+    #draw - its per image path is the jitter, and the guard below is the whole of it.
+    if 'saturation' in randomize and args.saturation_jitter_log2 > 0:
+        raise SystemExit(
+            "%s: saturation is drawn per record under randomize: and jittered again by "
+            "saturation_jitter_log2 %s. Use one or the other - the randomize block is the "
+            "per-record draw, saturation_jitter_log2 is for running the batch driver "
+            "without this runner." % (config_path, args.saturation_jitter_log2))
+
+    #Below zero the chroma is not desaturated but INVERTED - every colour sent to its
+    #complement, which would put a cyan grid on the paper. Refused here as well as in
+    #get_exposed, so a bad range fails on the config rather than partway through a batch that
+    #has already written images. Checked on the randomize range too, since that is where the
+    #value actually comes from.
+    #Zero itself is allowed, which is the one bound in this function that is not mirrored from
+    #the contrast a few lines up: a contrast of 0 destroys the page, a saturation of 0 only
+    #removes the colour and leaves a black and white photograph of an ECG - a real thing.
+    if 'saturation' in randomize:
+        spec = randomize['saturation']
+        kind = next(iter(spec))
+        saturation_low = min(spec[kind]) if kind == 'choice' else spec[kind][0]
+    else:
+        saturation_low = args.saturation
+    if saturation_low < 0:
+        raise SystemExit(
+            "%s: saturation must be at least 0, got %s. 1.0 is the neutral chroma and 0 is a "
+            "black-and-white page; a negative scale would send every colour to its "
+            "complement, putting a cyan grid on the paper." % (config_path, saturation_low))
+
     #black_point and white_point have the same two randomisation paths as the vignette, and
     #for the same reason: both are ONE SIDED with a neutral at an end, so both use the
     #uniform idiom rather than the jitter of exposure and contrast, and the value reaching
