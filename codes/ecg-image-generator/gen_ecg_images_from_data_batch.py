@@ -102,6 +102,9 @@ def get_parser():
     parser.add_argument('--saturation',type=float,default=1.0)
     parser.add_argument('--saturation_jitter_log2',type=float,default=0.0)
 
+    parser.add_argument('--hue_rotation',type=float,default=0.0)
+    parser.add_argument('--hue_rotation_jitter_deg',type=float,default=0.0)
+
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)
     parser.add_argument('--wrinkles',action='store_true',default=False)

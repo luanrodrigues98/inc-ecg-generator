@@ -35,7 +35,7 @@ import imgaug
 from helper_functions import find_records
 from gen_ecg_images_from_data_batch import get_parser
 from gen_ecg_image_from_data import run_single_file
-from CameraPhotometry.photometry import LEVELS_MIN_SPAN
+from CameraPhotometry.photometry import LEVELS_MIN_SPAN, HUE_ROTATION_MAX
 
 REQUIRED_KEYS = ('input_directory', 'output_directory')
 DRAWS = ('choice', 'uniform', 'randint')
@@ -367,6 +367,40 @@ def build_args(config, config_path):
             "display gain 1/(wp - bp), and below the floor it is a threshold rather than a "
             "levels adjustment." % (config_path, max(black_bounds), min(white_bounds),
                                     worst_span, LEVELS_MIN_SPAN))
+
+    #hue_rotation has the same two randomisation paths as the exposure, the contrast and the
+    #saturation, and the pair below is the same failure: a key randomized here AND jittered
+    #again inside run_single_file is a second draw on top of the first, widening the
+    #distribution past whatever range was declared.
+    #
+    #NOTE WHAT IS *NOT* REFUSED HERE, exactly as for the saturation. This key needs no
+    #matching deterministic_hue_rotation to be legal under randomize:. The three keys that do
+    #need one - vignette, black_point, white_point - are ONE SIDED with the neutral at an end,
+    #so run_single_file draws uniform(0, value) inside them and the two draws compound into a
+    #biased distribution. A rotation is bilateral, so its per image path is the jitter, and
+    #the guard below is the whole of it.
+    if 'hue_rotation' in randomize and args.hue_rotation_jitter_deg > 0:
+        raise SystemExit(
+            "%s: hue_rotation is drawn per record under randomize: and jittered again by "
+            "hue_rotation_jitter_deg %s. Use one or the other - the randomize block is the "
+            "per-record draw, hue_rotation_jitter_deg is for running the batch driver "
+            "without this runner." % (config_path, args.hue_rotation_jitter_deg))
+
+    #Past a quarter turn either way the rotation stops being the residual colour cast this
+    #parameter models: at 180 degrees it IS saturation = -1, which the runner refuses a few
+    #guards up, and at 90 the a* of every originally red pixel has changed sign, so the grid
+    #is green-yellow one way and blue-magenta the other. Refused here as well as in
+    #get_exposed, so a bad range fails on the config rather than partway through a batch that
+    #has already written images. Checked on BOTH ENDS of the randomize range, not just the
+    #low one the contrast and the saturation check, because this bound is two sided.
+    for bound in _bounds('hue_rotation'):
+        if abs(bound) > HUE_ROTATION_MAX:
+            raise SystemExit(
+                "%s: hue_rotation must be within +/-%s degrees, got %s. 0 is the neutral "
+                "angle; at 180 the rotation is exactly saturation = -1, which puts a cyan "
+                "grid on the paper, and past 90 the red grid has turned green or blue. The "
+                "roteiro's own range for this parameter is -8 to +8."
+                % (config_path, HUE_ROTATION_MAX, bound))
 
     #deterministic_temp was inert upstream, so its companion --temperature kept a default
     #of 40000 that nothing ever read. Reading the flag makes that default live, and 40000 K

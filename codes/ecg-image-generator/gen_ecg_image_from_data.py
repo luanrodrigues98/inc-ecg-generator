@@ -121,6 +121,9 @@ def get_parser():
     parser.add_argument("--saturation", type=float, default=1.0)
     parser.add_argument("--saturation_jitter_log2", type=float, default=0.0)
 
+    parser.add_argument("--hue_rotation", type=float, default=0.0)
+    parser.add_argument("--hue_rotation_jitter_deg", type=float, default=0.0)
+
     parser.add_argument("--fully_random", action="store_true", default=False)
     parser.add_argument("--hw_text", action="store_true", default=False)
     parser.add_argument("--wrinkles", action="store_true", default=False)
@@ -563,10 +566,41 @@ def run_single_file(args):
         else:
             saturation = args.saturation
 
+        # Hue rotation: the angle a* and b* are turned through, sharing the CIELAB block
+        # and the single Lab round trip with the saturation above. The two are linear maps
+        # of the same plane and they COMMUTE - s*I*R = R*s*I - so there is no order between
+        # them to decide and no second conversion to pay for.
+        # What it models is narrower than the name: the white balance moves the illuminant
+        # along the daylight locus, which is one degree of freedom, and the real
+        # photographs sit beside that curve rather than on it. This is the residual, not a
+        # colour control of its own.
+        #
+        # It follows the jitter idiom of --exposure, --contrast and --saturation rather
+        # than the uniform(0, max) idiom of --vignette and the two clipping points, but NOT
+        # for the reason those three do. The rule this codebase states is that the neutral
+        # value decides, and here the neutral is 0 like the vignette's - what rules out
+        # uniform(0, max) is that the range is BILATERAL: a rotation runs to both sides of
+        # neutral and a one-sided draw would only ever turn the grid one way. So there is
+        # no --deterministic_hue_rotation either; a jitter of 0 is already the
+        # deterministic mode, exactly as for the three above.
+        # The draw is ADDITIVE IN DEGREES and not in log2, which is where this parameter
+        # parts company with the exposure, contrast and saturation jitters. Those three are
+        # multiplicative, so half and double are the same size of step and only the log is
+        # symmetric. Rotations compose by ADDITION - two turns of 4 degrees are one of 8,
+        # not one of 16 - so degrees are already the axis a symmetric draw belongs on.
+        # Drawn only when the jitter is active, so the default leaves the global random
+        # sequence - and therefore every augment draw below - untouched.
+        if args.hue_rotation_jitter_deg > 0:
+            hue_rotation = args.hue_rotation + random.uniform(
+                -args.hue_rotation_jitter_deg, args.hue_rotation_jitter_deg
+            )
+        else:
+            hue_rotation = args.hue_rotation
+
         out = get_exposed(out, exposure=exposure, wb_r=wb_r, wb_b=wb_b,
                           vignette=vignette, contrast=contrast,
                           black_point=black_point, white_point=white_point,
-                          saturation=saturation)
+                          saturation=saturation, hue_rotation=hue_rotation)
 
         if args.store_config == 2:
             # Recorded in stops beside the gain: a batch varies exposure log uniformly,
@@ -608,6 +642,13 @@ def run_single_file(args):
             # b* in the image is this multiple of what the render produced, and the neutral
             # axis is fixed, so a reader with this number has the whole transform.
             json_dict["saturation"] = round(saturation, 4)
+            # The angle applied, in degrees, closing stage D. No derived figure beside it,
+            # for the reason the saturation gives: every a* and b* in the image is this
+            # rotation of what the render produced and the neutral axis is fixed, so a
+            # reader with this number has the whole transform. Recorded in degrees rather
+            # than radians because degrees are the unit the flag, the range and the
+            # roteiro all use.
+            json_dict["hue_rotation"] = round(hue_rotation, 4)
 
         if augment:
             noise = (

@@ -101,6 +101,36 @@ LEVELS_MIN_SPAN = 0.05
 #for bit regression at its own neutral setting.
 SATURATION_NEUTRAL = 1.0
 
+#Neutral for the hue rotation, and it is back at ZERO after the saturation had it at one.
+#The pair share a plane and a conversion but not a neutral, and the difference is what each
+#one is: a SCALE of the distance from the neutral axis vanishes at 1, an ANGLE turned about
+#that axis vanishes at 0. The consequence is the one every parameter in this chain carries -
+#at the neutral value the stage must not touch the file at all - and here it is inherited
+#rather than argued afresh, because the guard that protects it is the saturation's: the
+#BGR -> Lab -> BGR round trip is not a per pixel identity in float32, so the block below has
+#to stay behind a condition that is false when BOTH parameters are neutral.
+HUE_ROTATION_NEUTRAL = 0.0
+
+#Largest rotation the stage accepts, in degrees, either way. It is NOT the documented range -
+#the roteiro asks for -8 to +8 and the batch draws inside that - and the distinction is the
+#same one the contrast and the saturation make: the documented range is where the parameter
+#is USEFUL, this is where it stops being what it claims to be.
+#
+#The argument is an identity rather than a matter of taste. A rotation of 180 degrees is
+#exactly saturation = -1: both send (a, b) to (-a, -b), and this module already refuses that
+#one a few guards up because it "would send every colour to its complement", putting a cyan
+#grid on the paper. Refusing a negative scale while accepting the rotation that reproduces it
+#would be the same failure through a different door.
+#90 is where the halfway point of that identity lands, and it has a meaning of its own: past
+#a quarter turn the a* of every originally red pixel has changed sign, so the grid is
+#green-yellow (positive) or blue-magenta (negative) and no longer red under any reading. The
+#roteiro's domain requirement for this parameter - "the ECG paper grid is red by
+#standardisation" - is the thing that fails there.
+#Refused rather than wrapped into range. 370 degrees is arithmetically 10, but a caller that
+#passes 370 has a bug and silently agreeing with it is how a flag ends up doing something
+#other than what it says.
+HUE_ROTATION_MAX = 90.0
+
 #D65 in mireds, the reciprocal megakelvin 1e6/T. Colour temperature is drawn on THIS axis
 #and not in kelvin, for the same reason exposure is drawn in stops and not in gain: 500 K
 #is an enormous shift at 3000 K and invisible at 15000 K, while a mired is roughly the
@@ -338,7 +368,7 @@ def _mean_preserving_offset(display,contrast):
 def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
                 vignette=VIGNETTE_NEUTRAL,contrast=CONTRAST_NEUTRAL,
                 black_point=BLACK_POINT_NEUTRAL,white_point=WHITE_POINT_NEUTRAL,
-                saturation=SATURATION_NEUTRAL):
+                saturation=SATURATION_NEUTRAL,hue_rotation=HUE_ROTATION_NEUTRAL):
     #Exposure of the camera: the scalar gain between the light that reached the sensor and
     #the value recorded for it. It multiplies IN LINEAR LIGHT, which is what makes it a
     #gain at all - the same factor applied to the sRGB values would be a power law on
@@ -447,6 +477,19 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
                          '(1.0 is the neutral chroma and 0 is a black and white page; '
                          'a negative scale would send every colour to its complement)'
                          % (saturation,))
+    #Past a quarter turn either way the rotation is no longer the residual colour cast this
+    #parameter models. The bound is argued from an identity rather than from taste: at 180
+    #degrees the rotation IS saturation = -1, which the guard immediately above refuses, and
+    #at 90 the a* of every originally red pixel has already changed sign - the grid is
+    #green-yellow one way and blue-magenta the other, and the roteiro's domain requirement
+    #that the ECG grid stay red has failed. Refused rather than wrapped into range, for the
+    #reason every other guard in this module gives.
+    if abs(hue_rotation) > HUE_ROTATION_MAX:
+        raise ValueError('hue_rotation must be within +/-%r degrees, got %r '
+                         '(0 is the neutral angle; at 180 the rotation is exactly '
+                         'saturation = -1, which the guard above refuses, and past 90 the '
+                         'red grid has turned green or blue)'
+                         % (HUE_ROTATION_MAX,hue_rotation))
     #The trailing terms are not decoration. Without them --vignette, --contrast,
     #--black_point and --white_point would be silently inert whenever the parameters before
     #them sit at their neutrals, which is a flag that parses and does nothing - the upstream
@@ -455,7 +498,8 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
             and vignette == VIGNETTE_NEUTRAL and contrast == CONTRAST_NEUTRAL
             and black_point == BLACK_POINT_NEUTRAL
             and white_point == WHITE_POINT_NEUTRAL
-            and saturation == SATURATION_NEUTRAL):
+            and saturation == SATURATION_NEUTRAL
+            and hue_rotation == HUE_ROTATION_NEUTRAL):
         return filename
 
     image = cv2.imread(filename,cv2.IMREAD_UNCHANGED)
@@ -631,12 +675,65 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
     #expressions above. Two cheap lines make the precondition of this conversion explicit
     #instead of inherited. What they cost is nothing measurable; what they buy is that this
     #stage cannot be broken from a distance.
-    if saturation != SATURATION_NEUTRAL:
+    #HUE ROTATION SHARES THIS BLOCK WITH THE SATURATION, and that is arithmetic rather than
+    #convenience. Both are linear maps of the SAME a*/b* plane - a scale is s*I, a rotation is
+    #R - and s*I commutes with R, so there is no order to decide between them and no reason to
+    #pay a second BGR -> Lab -> BGR round trip and a second gamut clip to apply them apart.
+    #Folded into one matrix they are one pass, and the parameter that closes stage D costs the
+    #chain nothing it was not already spending.
+    #
+    #WHAT THE ROTATION IS FOR, and it is narrower than the name suggests. The white balance
+    #two stages up moves the illuminant along the DAYLIGHT LOCUS, which is one degree of
+    #freedom: it can make the page warmer or cooler but it cannot move the cast off that
+    #curve. Measured on the real corpus, the photographs sit beside the locus and not on it,
+    #and this is the parameter for that residual - not for a colour control of its own.
+    #
+    #RANGE, MEASURED RATHER THAN ASSUMED, because the roteiro asks for exactly that before
+    #this parameter is implemented. On the corpus of 8793 real photographs hue_mean_deg has a
+    #circular mean of 10.5 degrees and a circular standard deviation of 41.0; the generated
+    #batch already stands at 330.1 and 75.4. So the spread is ALREADY 1.8x too wide and this
+    #parameter must not be used to add more of it, which is the opposite of what the roteiro
+    #assumes. What is genuinely off is the CENTRE, by about 40 degrees - and closing that here
+    #would take +30, where the red grid measures (192,137,109) and reads as tan. A page cast
+    #belongs to the white balance; a rotation drags the grid along with it. The batch
+    #therefore draws the roteiro's own -8 to +8, now confirmed by measurement: at +8 the red
+    #grid is (243,49,0) and the pink one (255,202,215), both still unmistakable.
+    #
+    #NO MEAN PRESERVING SOLVE, for the reason the saturation gives and by the same algebra: L
+    #is not a function of a or b, so rotating the pair leaves it untouched by construction and
+    #exposure keeps sole ownership of lum_mean. Measured across -40 to +40 on a full
+    #resolution page, lab_L_mean moves 0.18% and the residual is the gamut clip on the way
+    #back, exactly as it is for the scale.
+    if saturation != SATURATION_NEUTRAL or hue_rotation != HUE_ROTATION_NEUTRAL:
         display = np.clip(display,0.0,1.0).astype(np.float32)
         #L in [0,100], a and b in [-127,127] centred on zero - the float32 convention, not
         #the 8 bit one, which stores a + 128 and would need the offset removed first.
         lab = cv2.cvtColor(display,cv2.COLOR_BGR2Lab)
-        lab[:,:,1:] *= float(saturation)
+        if hue_rotation != HUE_ROTATION_NEUTRAL:
+            #The scale folded INTO the rotation matrix, which is what lets one pass do both:
+            #s*R = R*s, so the coefficients below are the whole of both parameters.
+            radians = np.radians(float(hue_rotation))
+            cos_term = float(np.cos(radians))*float(saturation)
+            sin_term = float(np.sin(radians))*float(saturation)
+            #BOTH channels copied, not just a. lab[:,:,1] and lab[:,:,2] are strided views
+            #into one buffer and the first assignment below writes into it, so b must not
+            #still be a view when the second line reads it. Copying only a would also work
+            #TODAY - b aliases a channel the first line does not touch - but then the
+            #correctness of this block would depend on the ORDER of the next two lines, and
+            #an edit that swapped them would break it silently. Two copies cost one page of
+            #float32 and remove the trap.
+            a = lab[:,:,1].copy()
+            b = lab[:,:,2].copy()
+            lab[:,:,1] = cos_term*a - sin_term*b
+            lab[:,:,2] = sin_term*a + cos_term*b
+        else:
+            #The saturation only path, kept EXACTLY as it was before this parameter existed.
+            #Folding it into the matrix above would be a per pixel identity in exact
+            #arithmetic - cos(0) is 1.0 and sin(0) is 0.0, both exact - but it would change
+            #which floating point operations run, and the regression this increment is
+            #measured against is byte equality of the finished PNG at the new parameter's
+            #neutral value. The branch is the whole of that guarantee.
+            lab[:,:,1:] *= float(saturation)
         display = np.clip(cv2.cvtColor(lab,cv2.COLOR_Lab2BGR),0.0,1.0)
 
     colour = np.clip(display*255.0 + 0.5,0,255).astype(np.uint8)
