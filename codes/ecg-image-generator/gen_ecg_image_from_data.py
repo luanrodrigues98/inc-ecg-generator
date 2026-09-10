@@ -14,7 +14,7 @@ from PaperCrumple.crumple import get_crumpled, light_azimuth
 from CameraOptics.optics import get_blurred
 from SceneIllumination.illumination import get_illuminated
 from CameraPhotometry.photometry import get_exposed, daylight_gains, mired_to_cct_k
-from CameraSensor.sensor import get_resampled
+from CameraSensor.sensor import get_resampled, get_sensor_noise, sensor_noise_level
 import warnings
 from helper_functions import read_config_file
 
@@ -128,6 +128,9 @@ def get_parser():
     parser.add_argument("--supersample", type=int, default=1)
     parser.add_argument("--output_width", type=int, default=0)
     parser.add_argument("--output_height", type=int, default=0)
+
+    parser.add_argument("--sensor_noise", type=float, default=0.0)
+    parser.add_argument("--sensor_noise_jitter_log2", type=float, default=0.0)
 
     parser.add_argument("--fully_random", action="store_true", default=False)
     parser.add_argument("--hw_text", action="store_true", default=False)
@@ -691,6 +694,14 @@ def run_single_file(args):
         # resolution and then downscaled by 3 comes out with a third of the amplitude and
         # a correlation length it should not have, and sensor_noise, the next increment,
         # would be calibrating against an artefact of the supersample factor.
+        # THAT LAST CLAUSE READ THE SLOT WRONG, and E-14 corrected it. The requirement it
+        # states is real - the noise has to originate on the delivered grid - but this is
+        # not the only point that satisfies it, and it is not the right one: get_augment
+        # RESAMPLES, through iaa.Affine(rotate) and iaa.Crop, so noise injected here would
+        # be smoothed by an angle drawn per image. get_sensor_noise therefore runs at the
+        # very end of this function, still on the delivered grid and no longer upstream of
+        # a resample. Everything above about the DOWNSCALE belonging before get_augment
+        # stands unchanged.
         # Before get_augment for a second, mechanical reason: it reads h, w from the image
         # and uses [h/2, w/2] as the rotation origin for the annotations, so the pixels and
         # the stored geometry have to already agree on the frame.
@@ -771,12 +782,30 @@ def run_single_file(args):
             temp = 0
             rotate = 0
             noise = 0
+        # The amplitude this sheet is grained with, resolved before the JSON is written
+        # even though the stage itself runs after the QR block below. Nothing between the
+        # two touches it, and the annotation has to carry the value that was applied.
+        sensor_noise = sensor_noise_level(
+            args.sensor_noise,
+            args.sensor_noise_jitter_log2,
+            out,
+            seed=args.seed,
+            start_index=args.start_index,
+        )
+
         if args.store_config == 2:
             json_dict["augment"] = bool(augment)
             json_dict["crop"] = crop
             json_dict["temperature"] = temp
             json_dict["rotate"] = rotate
+            # The legacy imgaug noise, kept in the annotation because it is still a flag
+            # and a reader has to be able to tell which of the two grained the image.
+            # Set it to 0 with deterministic_noise on and sensor_noise owns the page.
             json_dict["noise"] = noise
+            # The amplitude applied, in levels of 0-255, closing stage E-14. The jitter is
+            # not recorded beside it: this IS the drawn value, and the centre it came from
+            # says nothing about this image that this number does not say better.
+            json_dict["sensor_noise"] = round(sensor_noise, 4)
 
         if args.store_config:
             json_object = json.dumps(json_dict, indent=4)
@@ -804,6 +833,24 @@ def run_single_file(args):
             img[: qr_img.shape[0], -qr_img.shape[1] :, :3] = qr_img_color
             img = Image.fromarray(img)
             img.save(out)
+
+        # The noise of the sensor, closing stage E-14 and the chain. LAST, with no
+        # exceptions above it: everything before this describes the page, the light or the
+        # lens, and this is the instrument reading them. Two of those stages resample
+        # after the sampling grid is fixed - iaa.Affine(rotate) and iaa.Crop inside
+        # get_augment - so anywhere earlier the grain would be smoothed by a draw of the
+        # augment's rather than by this parameter, and the measured noise_sigma would stop
+        # being a function of the flag. After the QR stamp for the same reason read the
+        # other way: a code pasted onto a grained page and left clean is the one region of
+        # the image that would advertise the compositing.
+        # The jpeg_q of increment 15 goes after this and nothing else does.
+        # At 0 - the default - this does not even open the file. See get_sensor_noise.
+        out = get_sensor_noise(
+            out,
+            sensor_noise=sensor_noise,
+            seed=args.seed,
+            start_index=args.start_index,
+        )
 
     return len(out_array)
 

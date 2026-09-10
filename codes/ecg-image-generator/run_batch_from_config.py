@@ -36,7 +36,7 @@ from helper_functions import find_records
 from gen_ecg_images_from_data_batch import get_parser
 from gen_ecg_image_from_data import run_single_file
 from CameraPhotometry.photometry import LEVELS_MIN_SPAN, HUE_ROTATION_MAX
-from CameraSensor.sensor import SUPERSAMPLE_MAX
+from CameraSensor.sensor import SUPERSAMPLE_MAX, SENSOR_NOISE_MAX
 
 REQUIRED_KEYS = ('input_directory', 'output_directory')
 DRAWS = ('choice', 'uniform', 'randint')
@@ -464,6 +464,40 @@ def build_args(config, config_path):
             "%s: random_resolution and output_width/output_height are two ways of setting "
             "the delivered size and the second wins, which makes the first silently inert. "
             "Set random_resolution: false." % config_path)
+
+    #Stage E-14, the noise of the sensor. Negative is not a quieter sensor, it is a scale
+    #factor on a gaussian and means exactly what its absolute value means, so it would be a
+    #flag that silently does the opposite of what it reads. The ceiling is a bound on
+    #meaning: see SENSOR_NOISE_MAX. Checked through _bounds so a fixed value and a
+    #randomize range are both covered, and a range is checked at BOTH ends.
+    for bound in _bounds('sensor_noise'):
+        if bound < 0 or bound > SENSOR_NOISE_MAX:
+            raise SystemExit(
+                "%s: sensor_noise is %s and must be in [0, %g] levels. 0 switches the "
+                "stage off; the real corpus runs to a noise_sigma of 12.4 at its very "
+                "noisiest, which this page reaches at about 26."
+                % (config_path, bound, SENSOR_NOISE_MAX))
+
+    #The jitter is a half width in log2 of the amplitude, so it cannot be negative, and
+    #past 3 it spans a factor of 64 - the whole usable range and then some, from a page
+    #that is cleaner than any real photograph to one past the noisiest.
+    if args.sensor_noise_jitter_log2 < 0 or args.sensor_noise_jitter_log2 > 3:
+        raise SystemExit(
+            "%s: sensor_noise_jitter_log2 is %s and must be in [0, 3]. It is a half width "
+            "in log2 of the amplitude, so 1 already spans a factor of four and 0 is the "
+            "deterministic mode." % (config_path, args.sensor_noise_jitter_log2))
+
+    #Two draws on one quantity, the guard the contrast and the saturation both carry. There
+    #is no inner uniform(0, value) here - the per-image path IS the jitter - so this is the
+    #whole of it, exactly as for the saturation.
+    if 'sensor_noise' in randomize and args.sensor_noise_jitter_log2 > 0:
+        raise SystemExit(
+            "%s: sensor_noise is drawn per record under randomize: and jittered again by "
+            "sensor_noise_jitter_log2 %s. Use one or the other - and prefer the jitter "
+            "here, because randomize: consumes its keys from one per-record stream in "
+            "ALPHABETICAL order, so sensor_noise there re-rolls standard_grid_color, every "
+            "trace_* key, vignette, white_point and wrinkles for the whole batch."
+            % (config_path, args.sensor_noise_jitter_log2))
 
     return args, randomize
 

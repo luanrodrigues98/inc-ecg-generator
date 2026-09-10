@@ -43,7 +43,7 @@ input_directory: /home/luan-rodrigues/faculdade/inc-ecg-generator/sample-data/pt
 # NOT the ptbxl_synthetic_3000 directory the previous run filled: those 3000 images came
 # from a generator with no exposure, no white balance and no vignette, and the runner
 # writes flat, so a rerun would interleave two different datasets under one name.
-output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_4000
+output_directory: out/sensor_noise_eval
 
 # Each record is 1000 samples at 100 Hz = 10 s, and paper_len in config.yaml is 10 s, so
 # every record yields exactly one frame and one PNG. 3000 images therefore means the
@@ -58,7 +58,7 @@ output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbx
 # removes records100/union, 1998 byte-identical copies of 01000-02999 that os.walk
 # happens to reach third - without the check they would enter the set a second time and,
 # in a flat output directory, overwrite the originals.
-max_num_images: 4000
+max_num_images: 10
 
 seed: 42
 config_file: config.yaml   # plotting constants (paper_len, layout, ticks)

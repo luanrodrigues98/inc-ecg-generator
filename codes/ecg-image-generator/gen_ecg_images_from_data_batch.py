@@ -109,6 +109,9 @@ def get_parser():
     parser.add_argument('--output_width',type=int,default=0)
     parser.add_argument('--output_height',type=int,default=0)
 
+    parser.add_argument('--sensor_noise',type=float,default=0.0)
+    parser.add_argument('--sensor_noise_jitter_log2',type=float,default=0.0)
+
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)
     parser.add_argument('--wrinkles',action='store_true',default=False)

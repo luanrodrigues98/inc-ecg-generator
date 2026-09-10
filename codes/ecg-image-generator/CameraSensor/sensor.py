@@ -1,3 +1,6 @@
+import os
+import zlib
+
 import cv2
 import numpy as np
 from linear_light import srgb_to_linear, linear_to_srgb
@@ -23,6 +26,20 @@ SUPERSAMPLE_MAX = 4
 #The bound is tight ON PURPOSE, and it is the one guard in this module that protects a
 #physical invariant rather than a budget: see resolve_output_size.
 ASPECT_TOLERANCE = 0.005
+
+#Floor of the signal-dependent noise law, as a fraction of full scale. Photon noise goes
+#to zero with the signal, but a sensor's read noise does not, so without a floor the black
+#trace would come out perfectly clean while the paper around it is grained - the one place
+#on this page where a viewer can see the two side by side. 0.02 is the roteiro's figure.
+NOISE_FLOOR_FRACTION = 0.02
+
+#Largest sensor_noise the stage accepts, in levels of 0-255. A bound on meaning rather than
+#on cost: measured on this page, 20 already delivers a noise_sigma of 9.5 against a corpus
+#that runs to 12.36 at its maximum, so 40 is past the noisiest real photograph by a wide
+#margin and well into the range where the clipping of the grain against white paper starts
+#pulling lum_mean down and competing with the exposure. It is also the roteiro's own
+#bracket ceiling for this parameter.
+SENSOR_NOISE_MAX = 40.0
 
 
 def resolve_output_size(render_width,render_height,supersample,output_width,output_height):
@@ -215,4 +232,116 @@ def get_resampled(input_file,supersample=1,output_width=0,output_height=0,json_d
                           float(width)/float(render_width),
                           float(height)/float(render_height))
 
+    return filename
+
+
+def sensor_noise_level(sensor_noise,sensor_noise_jitter_log2,input_file,seed=-1,start_index=-1):
+    #Resolve the noise amplitude this particular sheet was photographed with, in levels of
+    #0-255. A jitter of 0 is the deterministic mode and there is no --deterministic_sensor_noise
+    #to go with it, for the reason the saturation gives: the neutral value here is 0, so
+    #uniform(0, max) cannot express a range with a floor and a jitter around a centre can.
+    #
+    #The draw is in LOG2 of the amplitude rather than in the amplitude itself, as the
+    #exposure jitter is in stops and the contrast and saturation jitters in log2. The
+    #corpus is the reason rather than the convention: noise_sigma over the 8793 real
+    #photographs runs 2.11 at P05, 3.16 at the median and 9.22 at P95, a right-skewed
+    #spread where the distance from the median to P95 is three times the distance down to
+    #P05. A symmetric draw on the amplitude would put half its mass in a range the corpus
+    #barely occupies; a symmetric draw in log2 follows the shape.
+    #
+    #A STREAM OF ITS OWN, keyed by the record name, and this is the load-bearing part. The
+    #runner consumes the keys of its randomize: block from ONE per-record stream in
+    #ALPHABETICAL order, so a key added there shifts every draw that sorts after it -
+    #sensor_noise would land between saturation and standard_grid_color and silently
+    #re-roll the grid colour, all four trace parameters, the vignette, the white point and
+    #the wrinkles of every record in the batch. Drawing here instead costs that stream
+    #nothing, which is also why supersample was kept out of it in batch_ptbxl_3000.yaml.
+    if sensor_noise_jitter_log2 <= 0:
+        return float(sensor_noise)
+    record_key = zlib.crc32(os.path.basename(input_file).encode('utf-8'))
+    rng = np.random.default_rng([abs(int(seed)),abs(int(start_index)),record_key,3])
+    return float(sensor_noise*2.0**rng.uniform(-sensor_noise_jitter_log2,sensor_noise_jitter_log2))
+
+def get_sensor_noise(input_file,sensor_noise=0.0,seed=0,start_index=0):
+    #The noise of the sensor, closing stage E-14. Every stage before this one describes
+    #something that happened to the page or to the light reaching it; this one is the first
+    #that describes the INSTRUMENT, and it is the last thing that happens to the image.
+    #
+    #POSITION. The roteiro asks for it "at output resolution, after the downscale", and the
+    #comment get_resampled carries says the same from the other side. Both are satisfied
+    #here, but the call site is further down the chain than that phrasing suggests, and the
+    #reason is metrological rather than aesthetic. ImageAugmentation/augment.py runs
+    #iaa.Affine(rotate=rot) and iaa.Crop, and BOTH RESAMPLE. Noise injected before them
+    #would be smoothed by an angle drawn per image, so the noise_sigma finally measured
+    #would be a function of the augment draw rather than of this parameter, and nothing
+    #could be calibrated against it. The physical reading agrees: the paper is what is
+    #rotated in front of the camera, and the noise of the sensor does not rotate with it.
+    #So this runs after get_augment, and after the QR stamp so the stamp is grained like
+    #the rest of the page. The JPEG of increment 15 goes after it, and nothing else does.
+    #
+    #SIGNAL DEPENDENT, not homoscedastic. A photosite's shot noise goes with the square
+    #root of the count of photons it collected, so the standard deviation follows the
+    #square root of the signal. On this page that is the whole point rather than a
+    #refinement: an ECG is a large area of white paper carrying a thin black trace, and
+    #uniform noise is visibly wrong in both regions at once - too clean on the paper, too
+    #dirty on the trace. The floor of 0.02 keeps the trace from coming out perfectly noise
+    #free, which no sensor manages either: read noise survives where photon noise does not.
+    #
+    #PER CHANNEL, independently. Each photosite carries one colour and counts its own
+    #photons, so the three planes are three separate measurements. The visible consequence
+    #is chroma speckle rather than clean luminance grain, which is what a real photograph
+    #at high ISO shows. It is also what sets the useful range of this parameter: three
+    #independent channels combine into the luma the metric reads at about 0.67 of their
+    #own sigma, so a given noise_sigma needs a value about half again as large here.
+    filename = input_file
+
+    #The neutral case, short circuited before the file is opened, in the idiom get_resampled
+    #uses and for the same reason: an imread/imwrite round trip would re-encode the PNG even
+    #where every pixel matched, and the regression standard of this branch is byte equality
+    #of the finished file at the neutral value.
+    if sensor_noise <= 0:
+        return filename
+
+    image = cv2.imread(filename,cv2.IMREAD_UNCHANGED)
+    if image is None:
+        return filename
+    if image.ndim == 2:
+        image = cv2.cvtColor(image,cv2.COLOR_GRAY2BGR)
+
+    #A stream of its own, keyed by the record name, in the idiom of PaperCrumple.crumple.
+    #The record name is not decoration here: without it every sheet of a batch would carry
+    #the SAME field of noise, because the runner hands every record the same seed and the
+    #same start_index. A digitiser trained on 4000 images sharing one noise realisation
+    #would be learning the realisation.
+    record_key = zlib.crc32(os.path.basename(filename).encode('utf-8'))
+    rng = np.random.default_rng([abs(int(seed)),abs(int(start_index)),record_key,2])
+
+    alpha = image[:,:,3] if image.shape[2] == 4 else None
+    colour = image[:,:,:3].astype(np.float32)
+
+    #In DISPLAY space, and this is the one stage after the downscale that must not convert
+    #to linear light - the opposite of what every neighbouring module argues for itself, so
+    #it needs saying. The roteiro writes the law in levels of 0-255, and noise_sigma, the
+    #feature it is calibrated against, is measured on the delivered sRGB image in those same
+    #levels. Converting here would make the parameter mean something other than what the
+    #metric reads, and the sqrt law would land on radiance rather than on code values.
+    #The honest note is that shot noise is Poisson in the raw domain and this is its
+    #display-space approximation; the roteiro specifies the approximation, and it is what
+    #keeps the parameter and its target in one unit.
+    effective_sigma = sensor_noise*np.sqrt(np.clip(colour/255.0,NOISE_FLOOR_FRACTION,1.0))
+    colour = colour + rng.standard_normal(colour.shape,dtype=np.float32)*effective_sigma
+    colour = np.clip(colour + 0.5,0,255).astype(np.uint8)
+
+    if alpha is not None:
+        #The alpha is left alone. It is constant at 255 on every render this generator
+        #produces, and an opacity is not a photon count.
+        image = np.dstack([colour,alpha])
+    else:
+        image = colour
+
+    cv2.imwrite(filename,image)
+
+    #No annotation is touched. This stage changes no geometry, so plotted_pixels, both
+    #bounding boxes and the grid pitch all still describe the image - which is why it needs
+    #nothing of what scale_annotations does for the downscale.
     return filename
