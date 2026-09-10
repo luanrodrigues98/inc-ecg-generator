@@ -64,6 +64,33 @@ CONTRAST_ANCHOR = 0.5
 #for.
 CONTRAST_OFFSET_HALF_WIDTH = 0.5
 
+#Neutral for the shadow clipping point, and the neutral is back at ZERO after the contrast
+#had it at one. black_point is an AMOUNT SUBTRACTED before the range is restretched, so
+#nothing happens at 0 - the same shape as the vignette strength and the illumination
+#strength, and the opposite of the two gains between them.
+BLACK_POINT_NEUTRAL = 0.0
+
+#Neutral for the highlight clipping point, and it is the odd one in this module: the
+#neutral is the TOP of the range and the parameter moves DOWNWARD from it. white_point is
+#the input value mapped to pure white, so 1.0 maps white to white and leaves the page
+#alone, and every value below it flattens a band of the histogram onto 255. That is why
+#the per image draw of this one is uniform(white_point, 1.0) and not uniform(0,
+#white_point): which idiom applies is decided by the neutral value, as it is everywhere
+#else in this chain, and this neutral sits at the far end.
+WHITE_POINT_NEUTRAL = 1.0
+
+#Smallest white_point - black_point this stage accepts. It is the roteiro's "guard against
+#division by zero if the two points approach each other", answered by REFUSAL rather than
+#by an epsilon in the denominator, for the reason every other guard in this module gives: a
+#silently clamped parameter is a flag that parses and does something other than what it
+#says. The span is also the display gain, 1/(wp - bp), so 0.05 is a 20x stretch - already
+#past a levels adjustment and into a threshold. The roteiro's own box, black 0-0.10 against
+#white 0.90-1.0, has a worst case span of 0.80, sixteen times this floor, so nothing inside
+#the documented range comes near it. It binds only on a caller that passes a degenerate or
+#an inverted pair, which is exactly what it is for - and unlike every other bound here that
+#pair can be produced by two INDEPENDENT draws, so nothing upstream rules it out.
+LEVELS_MIN_SPAN = 0.05
+
 #D65 in mireds, the reciprocal megakelvin 1e6/T. Colour temperature is drawn on THIS axis
 #and not in kelvin, for the same reason exposure is drawn in stops and not in gain: 500 K
 #is an enormous shift at 3000 K and invisible at 15000 K, while a mired is roughly the
@@ -299,7 +326,8 @@ def _mean_preserving_offset(display,contrast):
 
 #Main function to expose the photograph
 def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
-                vignette=VIGNETTE_NEUTRAL,contrast=CONTRAST_NEUTRAL):
+                vignette=VIGNETTE_NEUTRAL,contrast=CONTRAST_NEUTRAL,
+                black_point=BLACK_POINT_NEUTRAL,white_point=WHITE_POINT_NEUTRAL):
     #Exposure of the camera: the scalar gain between the light that reached the sensor and
     #the value recorded for it. It multiplies IN LINEAR LIGHT, which is what makes it a
     #gain at all - the same factor applied to the sRGB values would be a power law on
@@ -365,12 +393,41 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
         raise ValueError('contrast must be greater than 0, got %r '
                          '(1.0 is the neutral curve; 0 would flatten the page onto a '
                          'single value)' % (contrast,))
-    #The last two terms are not decoration. Without them --vignette and --contrast would be
-    #silently inert whenever the parameters before them sit at their neutrals, which is a
-    #flag that parses and does nothing - the upstream failure this codebase refuses
-    #everywhere else.
+    #Outside [0, 1) the black point is not a shadow clip: a negative value LIFTS the shadows
+    #instead of crushing them, and at 1 every pixel is at or below the point and the sheet
+    #goes black. Refused rather than clamped, for the reason the exposure guard above gives.
+    if black_point < BLACK_POINT_NEUTRAL or black_point >= 1.0:
+        raise ValueError('black_point must be in [0, 1), got %r '
+                         '(0 is the neutral shadow clip; at 1 the whole page is at or '
+                         'below the point and the sheet goes black)' % (black_point,))
+    #Outside (0, 1] the white point is not a highlight clip: above 1 it maps white to
+    #something below white, which DARKENS the page - a gain in display space, and the
+    #exposure owns that - and at 0 or below every pixel is above the point and the sheet
+    #goes white.
+    if white_point <= 0 or white_point > WHITE_POINT_NEUTRAL:
+        raise ValueError('white_point must be in (0, 1], got %r '
+                         '(1.0 is the neutral highlight clip; above it the stage would '
+                         'darken the page, which belongs to the exposure)' % (white_point,))
+    #The pair, which no bound on either one alone can catch. The two are drawn
+    #INDEPENDENTLY - the roteiro calls them effectively decoupled from each other, and that
+    #is why they are allowed under the runner's randomize: block where wb_r/wb_b is refused
+    #- so nothing upstream stops one record from taking the top of one range and the bottom
+    #of the other.
+    if white_point - black_point < LEVELS_MIN_SPAN:
+        raise ValueError('white_point - black_point must be at least %r, got %r '
+                         '(black_point %r, white_point %r). The span is the display gain '
+                         '1/(wp - bp); below this floor it is a threshold rather than a '
+                         'levels adjustment.'
+                         % (LEVELS_MIN_SPAN,white_point - black_point,
+                            black_point,white_point))
+    #The trailing terms are not decoration. Without them --vignette, --contrast,
+    #--black_point and --white_point would be silently inert whenever the parameters before
+    #them sit at their neutrals, which is a flag that parses and does nothing - the upstream
+    #failure this codebase refuses everywhere else.
     if (exposure == EXPOSURE_NEUTRAL and wb_r == WB_NEUTRAL and wb_b == WB_NEUTRAL
-            and vignette == VIGNETTE_NEUTRAL and contrast == CONTRAST_NEUTRAL):
+            and vignette == VIGNETTE_NEUTRAL and contrast == CONTRAST_NEUTRAL
+            and black_point == BLACK_POINT_NEUTRAL
+            and white_point == WHITE_POINT_NEUTRAL):
         return filename
 
     image = cv2.imread(filename,cv2.IMREAD_UNCHANGED)
@@ -385,18 +442,18 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
     alpha = image[:,:,3] if image.shape[2] == 4 else None
     colour = image[:,:,:3].astype(np.float32)/255.0
 
-    #The roteiro asks this stage to stay in float and leave clipping to the black and
-    #white point increment. That is not available here and the reason is architectural,
-    #not a shortcut: every stage in this generator reads a PNG and writes a PNG, so the
-    #image is quantised to 8 bits and clipped at each boundary whatever this function
-    #does. Carrying the photometric chain in float would mean fusing exposure, white
-    #balance, vignette, contrast and the clipping points into one stage - a rewrite of the
-    #chain rather than one parameter.
-    #What the roteiro was protecting is still intact: clip_highlights_pct rises with the
-    #exposure here and stays calibratable. What is lost is only the headroom ABOVE white
-    #that a float chain would keep, and this page has very little of it to lose - roughly
-    #43% of it is already paper at pure white in the bare render, before any photometric
-    #stage runs at all.
+    #The roteiro asks this stage to stay in float and leave clipping to the black and white
+    #point increment. As of that increment it does. Exposure, white balance, vignette,
+    #contrast and the two clipping points are all fused into this one function, and the
+    #whole photometric chain now runs in float32 from the srgb_to_linear below to the single
+    #uint8 cast at the end - the rewrite that earlier versions of this comment said would be
+    #needed, arrived at one increment at a time, each fusion argued on its own terms.
+    #What is NOT recovered is the headroom above white that the stages BEFORE this one
+    #already discarded: the bare render reaches this function as a PNG, and roughly 43% of
+    #it is paper at pure white before any photometric stage runs at all. So white_point
+    #clips a page that has already lost part of its highlight detail to the renderer, and
+    #that is the one part of the roteiro's float chain this architecture still cannot
+    #honour.
     linear = srgb_to_linear(colour)
 
     #None rather than an identity mask when the parameter is off, so that the white balance
@@ -445,6 +502,42 @@ def get_exposed(input_file,exposure,wb_r=WB_NEUTRAL,wb_b=WB_NEUTRAL,
     if contrast != CONTRAST_NEUTRAL:
         display = (CONTRAST_ANCHOR + (display - CONTRAST_ANCHOR)*float(contrast)
                    + _mean_preserving_offset(display,contrast))
+
+    #Shadow and highlight clipping - the roteiro's black and white point - and the LAST
+    #thing this stage does. It runs after the tone curve, in display space, and the only
+    #operation left after it is the uint8 cast on the line below.
+    #
+    #THIS IS THE FIRST STAGE IN THE CHAIN THAT DOES NOT PUT lum_mean BACK, and that is a
+    #proof rather than an omission. Every stage before it ends in a bisection -
+    #mean_preserving_gain for the crumple and the illumination, _mean_preserving_gain for
+    #the white balance and the vignette, _mean_preserving_offset for the contrast - so that
+    #exposure is the single owner of the page brightness and a calibration cannot oscillate
+    #between two parameters. That remedy is not available here:
+    #
+    #    (x - bp)/(wp - bp)   is a gain of 1/(wp - bp) plus an offset, in display space
+    #    the contrast curve   is a gain of c          plus an offset SOLVED for a constant
+    #                                                 mean, in display space
+    #
+    #Solving this offset for a constant mean is solving the SAME offset, against the SAME
+    #constraint, on the SAME array - so the pair would collapse onto contrast = 1/(wp - bp)
+    #exactly, not approximately. A mean preserving black and white point is a provable
+    #duplicate of the parameter before it.
+    #The roteiro's formula is therefore kept literal and this stage is allowed to move
+    #lum_mean. What it owns is not the mean but the CLIP: the fraction of the page that
+    #leaves [0,1] and is flattened onto an end, which is what clip_shadows_pct and
+    #clip_highlights_pct measure and what the roteiro names as its two calibration targets.
+    #The redundancy with contrast and exposure exists only where nothing clips; where
+    #something does, this is the only parameter in the chain that can produce it on demand.
+    #
+    #Guarded rather than applied unconditionally, exactly like the contrast above. At the
+    #neutral pair the expression reduces to clip(x, 0, 1), which the uint8 cast below
+    #already performs, so it would be a per pixel identity - but it would still change which
+    #floating point operations run, and the regression this increment is measured against is
+    #byte equality of the finished PNG.
+    if black_point != BLACK_POINT_NEUTRAL or white_point != WHITE_POINT_NEUTRAL:
+        display = np.clip((display - float(black_point))
+                          /(float(white_point) - float(black_point)),0.0,1.0)
+
     colour = np.clip(display*255.0 + 0.5,0,255).astype(np.uint8)
 
     if alpha is not None:

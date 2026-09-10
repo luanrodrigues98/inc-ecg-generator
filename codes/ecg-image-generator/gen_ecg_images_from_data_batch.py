@@ -68,6 +68,8 @@ def get_parser():
     parser.add_argument('--deterministic_blur',action="store_true",default=False)
     parser.add_argument('--deterministic_illum',action="store_true",default=False)
     parser.add_argument('--deterministic_vignette',action="store_true",default=False)
+    parser.add_argument('--deterministic_black_point',action="store_true",default=False)
+    parser.add_argument('--deterministic_white_point',action="store_true",default=False)
 
     parser.add_argument('--trace_thickness_mm',type=float,default=None)
     parser.add_argument('--trace_thickness_jitter',type=float,default=0.15)
@@ -93,6 +95,9 @@ def get_parser():
 
     parser.add_argument('--contrast',type=float,default=1.0)
     parser.add_argument('--contrast_jitter_log2',type=float,default=0.0)
+
+    parser.add_argument('--black_point',type=float,default=0.0)
+    parser.add_argument('--white_point',type=float,default=1.0)
 
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)

@@ -86,6 +86,8 @@ def get_parser():
     parser.add_argument("--deterministic_blur", action="store_true", default=False)
     parser.add_argument("--deterministic_illum", action="store_true", default=False)
     parser.add_argument("--deterministic_vignette", action="store_true", default=False)
+    parser.add_argument("--deterministic_black_point", action="store_true", default=False)
+    parser.add_argument("--deterministic_white_point", action="store_true", default=False)
 
     parser.add_argument("--trace_thickness_mm", type=float, default=None)
     parser.add_argument("--trace_thickness_jitter", type=float, default=0.15)
@@ -112,6 +114,9 @@ def get_parser():
 
     parser.add_argument("--contrast", type=float, default=1.0)
     parser.add_argument("--contrast_jitter_log2", type=float, default=0.0)
+
+    parser.add_argument("--black_point", type=float, default=0.0)
+    parser.add_argument("--white_point", type=float, default=1.0)
 
     parser.add_argument("--fully_random", action="store_true", default=False)
     parser.add_argument("--hw_text", action="store_true", default=False)
@@ -492,8 +497,41 @@ def run_single_file(args):
         else:
             contrast = args.contrast
 
+        # Shadow and highlight clipping: the black and white point, the last stage of the
+        # photometric chain and the last thing get_exposed does. out = clip((in - bp) /
+        # (wp - bp), 0, 1), in display space, after the tone curve.
+        # It is the FIRST STAGE IN THE CHAIN THAT DOES NOT PUT lum_mean BACK, and the
+        # reason is algebraic rather than an oversight: the levels map is a gain of
+        # 1/(wp - bp) plus an offset, and the contrast curve is a gain of c plus an offset
+        # already solved for a constant mean, so solving this one the same way would
+        # collapse the pair onto contrast = 1/(wp - bp) exactly. What this parameter owns
+        # is the CLIP - clip_shadows_pct and clip_highlights_pct - and not the mean. The
+        # proof is written out in full in CameraPhotometry/photometry.py.
+        #
+        # BOTH follow the uniform idiom of --vignette rather than the jitter idiom of
+        # --exposure and --contrast, by the rule this codebase already states: which idiom
+        # applies is decided by the NEUTRAL VALUE, not by taste. Both are one sided.
+        # --black_point is neutral at 0 and grows, so the value is a maximum and the draw
+        # is uniform(0, max), exactly as the vignette's is.
+        # --white_point is neutral at 1.0 and SHRINKS, so it is the same idiom mirrored:
+        # the value is a MINIMUM and the draw is uniform(min, 1.0). Drawing uniform(0, wp)
+        # here would put most of the batch near black, which is not what a highlight clip
+        # does at any setting.
+        # Drawn only when the parameter is active, so the defaults leave the global random
+        # sequence - and therefore every augment draw below - untouched.
+        if args.black_point > 0 and args.deterministic_black_point == False:
+            black_point = random.uniform(0, args.black_point)
+        else:
+            black_point = args.black_point
+
+        if args.white_point < 1 and args.deterministic_white_point == False:
+            white_point = random.uniform(args.white_point, 1.0)
+        else:
+            white_point = args.white_point
+
         out = get_exposed(out, exposure=exposure, wb_r=wb_r, wb_b=wb_b,
-                          vignette=vignette, contrast=contrast)
+                          vignette=vignette, contrast=contrast,
+                          black_point=black_point, white_point=white_point)
 
         if args.store_config == 2:
             # Recorded in stops beside the gain: a batch varies exposure log uniformly,
@@ -523,6 +561,12 @@ def run_single_file(args):
             # of this number and the page mean, and it is the evaluation sweep - not the
             # per-image annotation - that has a use for it.
             json_dict["contrast"] = round(contrast, 4)
+            # The two values applied, following the contrast. No derived figure beside
+            # them: unlike the exposure there is no other axis these are naturally flat
+            # on, and the map they imply is closed form anyway - a reader with the pair
+            # has the whole curve, including the display gain 1/(wp - bp).
+            json_dict["black_point"] = round(black_point, 4)
+            json_dict["white_point"] = round(white_point, 4)
 
         if augment:
             noise = (

@@ -32,7 +32,7 @@ input_directory: /home/luan-rodrigues/faculdade/inc-ecg-generator/sample-data/pt
 # NOT the ptbxl_synthetic_3000 directory the previous run filled: those 3000 images came
 # from a generator with no exposure, no white balance and no vignette, and the runner
 # writes flat, so a rerun would interleave two different datasets under one name.
-output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_4000
+output_directory: out/clipping_eval
 
 # Each record is 1000 samples at 100 Hz = 10 s, and paper_len in config.yaml is 10 s, so
 # every record yields exactly one frame and one PNG. 3000 images therefore means the
@@ -47,7 +47,7 @@ output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbx
 # removes records100/union, 1998 byte-identical copies of 01000-02999 that os.walk
 # happens to reach third - without the check they would enter the set a second time and,
 # in a flat output directory, overwrite the originals.
-max_num_images: 4000
+max_num_images: 10
 
 seed: 42
 config_file: config.yaml   # plotting constants (paper_len, layout, ticks)
@@ -209,18 +209,14 @@ randomize:
   # blow out, that is the distribution this generator is trying to cover, and clipping is
   # the only parameter in the chain that can produce it on demand.
   #
-  # WHAT THAT COSTS, measured in out/clipping_eval/RESULTADOS.md and not hidden. The figure
-  # to read is the grid amplitude divided by the local paper level - scale free, and what a
-  # digitiser actually thresholds against; the raw amplitude RISES with the stretch and is
-  # misleading. On that metric white_point is neutral for the grid above 0.92 at any
-  # exposure that is not already blown, and the cost is concentrated in the bottom fifth of
-  # the range: 0.923 of the grid contrast at exposure 0.82 x white_point 0.90, and 0.565 at
-  # exposure 1.15 x 0.90, where 59.5% of the sheet is pure white before this stage even runs
-  # and the clipped fraction ends at 83.6%. Those records come out readable and without a
-  # recoverable millimetre scale, which the exposure block above calls the worst failure a
-  # digitiser can be handed. It is now a declared choice with a number beside it rather than
-  # a side effect - but it IS in this batch, and a digitiser trained on it will see such
-  # pages.
+  # WHAT THAT COSTS, measured in out/clipping_eval/RESULTADOS.md and not hidden: at the top
+  # of the exposure range the two stack. At exposure 1.15, where 59.5% of the sheet is
+  # already pure white before this stage runs, white_point 0.90 takes the 1 mm grid down to
+  # 0.565 of its amplitude and pushes the clipped fraction to 83.6%. Those records come out
+  # readable and without a recoverable millimetre scale, which the exposure block above
+  # calls the worst failure a digitiser can be handed. It is now a declared choice with a
+  # number beside it rather than a side effect - but it IS in this batch, and a digitiser
+  # trained on it will see such pages.
   #
   # ONE COUPLING THE ROTEIRO DOES NOT MODEL, and it is the finding of this increment:
   # white_point is an absolute threshold in display space, but the page's white is not at a
