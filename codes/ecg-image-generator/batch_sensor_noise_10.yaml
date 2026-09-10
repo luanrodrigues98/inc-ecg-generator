@@ -655,6 +655,39 @@ sensor_noise: 6.0
 # run is a true prefix of the four thousand image one.
 sensor_noise_jitter_log2: 1.0
 
+# --- Retomada -------------------------------------------------------------------------
+# Pula os registros cuja saída já está PRONTA neste diretório, de modo que uma batelada
+# interrompida continua de onde parou em vez de recomeçar. Ligado por padrão.
+#
+# PRONTA quer dizer mais que "o PNG existe", e a diferença é o ponto da checagem:
+# get_paper_ecg escreve o PNG e o JSON de TODOS os quadros de uma vez, na resolução de
+# render, e só depois o laço percorre cada um aplicando as distorções. Então um PNG no
+# disco prova que o render rodou, não que a cadeia terminou. A checagem exige, por quadro:
+# o JSON ao lado, a chave `augment` dentro dele - escrita só no fim da cadeia, e presente
+# também nas anotações anteriores aos incrementos do roteiro - e o tamanho do PNG batendo
+# com o `width`/`height` que a anotação declara. Qualquer coisa que ela não consiga provar
+# como pronta é refeita por cima: um render desperdiçado custa menos que uma página
+# meio-processada no corpus.
+#
+# max_num_images conta os pulados JUNTO com os escritos. Ele diz com quantas imagens o
+# conjunto deve TERMINAR, não quantas esta invocação deve produzir, então retomar um lote
+# de 4000 que já tem 1500 renderiza as 2500 que faltam e não outras 4000.
+#
+# ATENÇÃO AO MUDAR PARÂMETROS. O pulo é decidido pelos ARQUIVOS estarem prontos, não por
+# terem sido produzidos por esta configuração. Se você mudar sensor_noise, exposure ou
+# qualquer outra chave e rodar de novo por cima, nada é regerado e o conjunto fica metade
+# com os parâmetros velhos. Para refazer: `skip_existing: false`, ou esvazie o diretório.
+#
+# UMA BATELADA RETOMADA NÃO É IDÊNTICA A UMA ININTERRUPTA, e isso é honesto dizer. Os
+# sorteios do bloco randomize: são chaveados pelo NOME do registro e sobrevivem a qualquer
+# ordem, mas os sorteios internos de run_single_file - crumple_amplitude, blur_sigma,
+# illum_strength, a fonte, o pulso de calibração - saem dos streams globais semeados uma
+# vez, que avançam em série. Pular um registro não os avança, então os registros seguintes
+# recebem valores diferentes dos que receberiam numa corrida única. O conjunto continua
+# válido e dentro das mesmas distribuições; ele só não é reproduzível quadro a quadro
+# contra a corrida que não foi interrompida.
+skip_existing: true
+
 # --- Sensor stage (upstream imgaug augment) ------------------------------------------
 # Rotation, gaussian noise and crop. Requires store_config >= 1, enforced by the runner
 # rather than left to crash mid-batch.

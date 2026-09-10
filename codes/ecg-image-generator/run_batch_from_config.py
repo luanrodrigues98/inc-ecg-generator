@@ -20,7 +20,7 @@
 #
 #Usage:
 #    .venv310/bin/python run_batch_from_config.py batch_ptbxl_3000.yaml
-import os, sys, random, shutil, tempfile, yaml
+import os, sys, glob, json, random, shutil, tempfile, yaml
 import numpy as np
 from tqdm import tqdm
 
@@ -32,6 +32,7 @@ GENERATOR_ROOT = os.path.dirname(os.path.abspath(__file__))
 os.chdir(GENERATOR_ROOT)
 
 import imgaug
+from PIL import Image
 from helper_functions import find_records
 from gen_ecg_images_from_data_batch import get_parser
 from gen_ecg_image_from_data import run_single_file
@@ -40,6 +41,74 @@ from CameraSensor.sensor import SUPERSAMPLE_MAX, SENSOR_NOISE_MAX
 
 REQUIRED_KEYS = ('input_directory', 'output_directory')
 DRAWS = ('choice', 'uniform', 'randint')
+
+
+#Keys the end-of-chain block writes into the annotation at store_config 2. Their presence
+#is what separates a FINISHED frame from one the render left behind: get_paper_ecg writes
+#every frame's PNG and JSON upfront, at the render resolution, and only then does the
+#per-frame loop walk them applying distortions. So a PNG on disk proves the render ran, not
+#that the chain finished, and a batch killed halfway leaves a directory where the two are
+#indistinguishable by name alone. 'augment' is used rather than the newer keys because it
+#has been written there since upstream, so annotations produced before any of the roteiro
+#increments are still recognised as complete.
+FINISHED_MARKER = 'augment'
+
+
+def frames_on_disk(output_root, name):
+    """Every PNG this record has in the output directory, sorted by frame number."""
+    prefix = os.path.join(output_root, name + '-')
+    found = []
+    for path in glob.glob(glob.escape(prefix) + '*.png'):
+        suffix = os.path.basename(path)[len(name) + 1:-4]
+        if suffix.isdigit():
+            found.append((int(suffix), path))
+    return [path for _, path in sorted(found)]
+
+
+def record_is_finished(output_root, name, store_config):
+    """Whether this record's frames are all on disk AND all carry a finished chain.
+
+    Conservative in one direction ON PURPOSE: anything this cannot prove is finished is
+    reported unfinished, and the record is rendered again over the top. The cost of a false
+    'unfinished' is one wasted render; the cost of a false 'finished' is a corpus with
+    half-processed pages in it that nothing downstream would flag.
+
+    HOW MUCH IT CAN PROVE DEPENDS ON store_config, and the difference is worth knowing:
+
+      2  Exact. Every frame must carry FINISHED_MARKER, which only the end of the chain
+         writes, so a frame the render wrote and the loop never reached is caught.
+      1  Partial. The annotation exists but carries nothing the render did not already put
+         there, so a frame left behind mid-loop is caught only when its dimensions still
+         disagree with the annotation - which they do whenever supersample > 1, and do not
+         at supersample 1.
+      0  Existence only. No annotation is written at all, so an interrupted batch cannot be
+         detected here. Delete the output directory rather than resuming into it.
+    """
+    frames = frames_on_disk(output_root, name)
+    if not frames:
+        return False
+    if not store_config:
+        return True
+
+    for path in frames:
+        annotation = path[:-4] + '.json'
+        if not os.path.exists(annotation):
+            return False
+        try:
+            with open(annotation) as handle:
+                json_dict = json.load(handle)
+            width, height = Image.open(path).size
+        except (OSError, ValueError):
+            #A truncated PNG or an annotation cut off mid-write. Both mean the same thing.
+            return False
+        if store_config == 2 and FINISHED_MARKER not in json_dict:
+            return False
+        #The annotation counts its geometry in pixels of the frame it describes, and the
+        #sensor stage rewrites it when it integrates the page down. A disagreement means
+        #the file on disk is not the one the annotation describes.
+        if (json_dict.get('width'), json_dict.get('height')) != (width, height):
+            return False
+    return True
 
 
 def draw(spec, rng):
@@ -499,6 +568,23 @@ def build_args(config, config_path):
             "trace_* key, vignette, white_point and wrinkles for the whole batch."
             % (config_path, args.sensor_noise_jitter_log2))
 
+    #skip_existing is read as a switch, so anything but the two states is a typo rather
+    #than a setting. YAML true/false arrive as bools and pass here unchanged.
+    if args.skip_existing not in (0, 1, True, False):
+        raise SystemExit(
+            "%s: skip_existing is %r and must be true or false. It decides whether records "
+            "whose output is already finished in the output directory are skipped."
+            % (config_path, args.skip_existing))
+
+    #The check cannot see a half-finished record without an annotation to read, so pairing
+    #the resume with store_config 0 would silently keep whatever an interrupted run left.
+    if args.skip_existing and not args.store_config:
+        raise SystemExit(
+            "%s: skip_existing needs store_config 1 or 2. At 0 no annotation is written, so "
+            "a frame the render wrote and the chain never finished is indistinguishable "
+            "from a finished one and would be kept. Use store_config 2, or set "
+            "skip_existing: false and clear the output directory yourself." % config_path)
+
     return args, randomize
 
 
@@ -541,6 +627,7 @@ def main():
     print("output_directory : %s" % output_root)
     print("max_num_images   : %s" % args.max_num_images)
     print("seed             : %s" % args.seed)
+    print("skip_existing    : %s" % bool(args.skip_existing))
     print("randomized       : %s" % (', '.join(sorted(randomize)) or 'none'))
     sys.stdout.flush()
 
@@ -578,14 +665,36 @@ def main():
     #Count the bar in images rather than records: run_single_file returns the number of
     #frames it wrote, and max_num_images caps frames, not records. On this corpus the two
     #coincide at one frame per record, but a longer recording would split into several.
+    skip_existing = bool(args.skip_existing)
+
     total = len(records)
     if args.max_num_images != -1:
         total = min(args.max_num_images, total)
 
     written = 0
+    #Frames found already finished in the output directory. Counted SEPARATELY from written
+    #but against the SAME cap: max_num_images asks how many images the set should end up
+    #with, not how many this particular invocation should produce, so resuming a 4000 image
+    #batch that already holds 1500 renders the remaining 2500 rather than another 4000.
+    present = 0
+    skipped = 0
     bar = tqdm(total=total, unit='img', desc='rendering', dynamic_ncols=True)
     try:
         for header_file, recording_file, name in records:
+            #Skip what is already finished. Cheap to check and it happens before anything
+            #else, so a resume over a nearly complete directory costs a stat per record.
+            #SAFE ONLY BECAUSE THE PER-RECORD DRAWS ARE KEYED BY NAME: the randomize block
+            #is drawn from random.Random(seed:name) a few lines below, so a record keeps its
+            #parameters wherever the walk reaches it and skipping its neighbours cannot
+            #change them. See the note in the finished-frames helper for what it can prove.
+            if skip_existing and record_is_finished(output_root, name, args.store_config):
+                present += len(frames_on_disk(output_root, name))
+                skipped += 1
+                bar.update(min(written + present, total) - bar.n)
+                if args.max_num_images != -1 and written + present >= args.max_num_images:
+                    break
+                continue
+
             args.input_file = os.path.join(input_directory, recording_file)
             args.header_file = os.path.join(input_directory, header_file)
             args.start_index = -1
@@ -602,14 +711,20 @@ def main():
             written += run_single_file(args)
             #Clamp, so a record yielding more frames than the cap leaves cannot push the
             #bar past its total.
-            bar.update(min(written, total) - bar.n)
+            bar.update(min(written + present, total) - bar.n)
 
-            if args.max_num_images != -1 and written >= args.max_num_images:
+            if args.max_num_images != -1 and written + present >= args.max_num_images:
                 break
     finally:
         bar.close()
 
-    print("done: %d image(s) in %s" % (written, output_root))
+    if skipped:
+        #Named rather than silent. A resume that skips everything looks exactly like a run
+        #that did nothing, and the difference matters when a parameter was just changed:
+        #the skip is keyed on the FILES being finished, not on their having been produced
+        #by the configuration in front of you.
+        print("skipped          : %d record(s), %d image(s) already finished" % (skipped, present))
+    print("done: %d image(s) written, %d in %s" % (written, written + present, output_root))
 
 
 if __name__ == '__main__':

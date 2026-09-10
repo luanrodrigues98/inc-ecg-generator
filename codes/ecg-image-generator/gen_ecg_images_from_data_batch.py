@@ -112,6 +112,13 @@ def get_parser():
     parser.add_argument('--sensor_noise',type=float,default=0.0)
     parser.add_argument('--sensor_noise_jitter_log2',type=float,default=0.0)
 
+    #Read only by run_batch_from_config, which is the only thing that walks a directory and
+    #can therefore find work already done. An int rather than a store_true because its
+    #default is ON: a store_true defaulting to True is a flag the command line cannot turn
+    #off, and the store_false alternative would invert the name the way remove_lead_names
+    #does, which the batch YAML has a warning about.
+    parser.add_argument('--skip_existing',type=int,default=1)
+
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)
     parser.add_argument('--wrinkles',action='store_true',default=False)
