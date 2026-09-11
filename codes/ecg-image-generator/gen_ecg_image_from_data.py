@@ -68,6 +68,7 @@ def get_parser():
     parser.add_argument("--remove_lead_names", action="store_false", default=True)
     parser.add_argument("--lead_name_bbox", action="store_true", default=False)
     parser.add_argument("--store_config", type=int, nargs="?", const=1, default=0)
+    parser.add_argument("--store_gridpoints", action="store_true", default=False)
 
     parser.add_argument("--deterministic_offset", action="store_true", default=False)
     parser.add_argument("--deterministic_num_words", action="store_true", default=False)
@@ -174,6 +175,18 @@ def writeCSV(args):
 
 
 def run_single_file(args):
+    if args.store_gridpoints and not args.store_config:
+        # The sidecar .npy files and the JSON mirror both need rec_tail, which is only
+        # computed below when --store_config is truthy (same reason --augment already
+        # requires it - see CLAUDE.md's "Known traps"). Fail loudly here instead of
+        # letting store_gridpoints silently produce nothing, or crash later on an
+        # undefined rec_tail.
+        raise SystemExit(
+            "--store_gridpoints requires --store_config (1 or 2): the gridpoint "
+            "annotation is written into the per-frame JSON and its .npy sidecars share "
+            "that JSON's base filename."
+        )
+
     if hasattr(args, "st") == True:
         random.seed(args.seed)
         args.encoding = args.input_file
@@ -260,6 +273,7 @@ def run_single_file(args):
         lead_name_gap_jitter_mm=args.lead_name_gap_jitter_mm,
         column_gap_mm=args.column_gap_mm,
         column_gap_jitter_mm=args.column_gap_jitter_mm,
+        store_gridpoints=args.store_gridpoints,
     )
 
     for out in out_array:
@@ -822,8 +836,50 @@ def run_single_file(args):
             # not recorded beside it: this IS the drawn value, and the centre it came from
             # says nothing about this image that this number does not say better.
             json_dict["sensor_noise"] = round(sensor_noise, 4)
+            if augment and crop > 0:
+                # get_augment's crop step (iaa.Crop(percent=...,keep_size=True)) is a
+                # crop AND a resize back to canvas size, i.e. an offset AND a scale on
+                # every coordinate. Previously only the rotation was corrected and
+                # plotted_pixels silently drifted out of alignment with the image
+                # whenever crop > 0; get_augment now applies the same crop correction
+                # gridpoints gets. Recorded here because it changes what earlier
+                # annotations from this generator mean.
+                json_dict["plotted_pixels_crop_corrected"] = True
+
+        if args.store_gridpoints:
+            # gridpoints_mask is computed once, here, against the FINAL frame - after
+            # crumple, the E-13 resample and get_augment have all had their say - rather
+            # than threaded through every intermediate stage. A node is visible if its
+            # final coordinate falls inside the delivered canvas; nodes that warped or
+            # cropped out still carry a real coordinate (never a (0,0) sentinel), just
+            # masked False, so rectify_image's dense F.interpolate never gets pulled
+            # toward the origin by a hole in the lattice.
+            n_rows, n_cols = json_dict["gridpoints_shape"]
+            gridpoints_arr = np.asarray(json_dict["gridpoints"], dtype=np.float32).reshape(
+                n_rows, n_cols, 2
+            )
+            cols = gridpoints_arr[:, :, 0]
+            rows = gridpoints_arr[:, :, 1]
+            mask = (
+                (rows >= 0) & (rows < json_dict["height"]) &
+                (cols >= 0) & (cols < json_dict["width"])
+            )
+            json_dict["gridpoints_mask"] = mask.tolist()
+
+            # hengck23's own on-disk convention: (n_rows,n_cols,2) float32 [x,y], at
+            # OUTPUT resolution - now the SAME axis order as the JSON mirror above,
+            # which also stores [x,y] to match plotted_pixels, so this is a reshape.
+            gridpoint_xy = gridpoints_arr
+            np.save(rec_tail + ".gridpoint_xy.npy", gridpoint_xy)
+            np.save(rec_tail + ".gridpoint_mask.npy", mask)
 
         if args.store_config:
+            # Every coordinate pair this generator writes - plotted_pixels, the four
+            # corners of either bounding box, gridpoints - is [x, y]. Recorded here
+            # for the same reason plotted_pixels_crop_corrected is: it changes what
+            # earlier annotations from this generator mean, and there is no other
+            # version marker on the JSON schema.
+            json_dict["coordinate_order"] = "xy"
             json_object = json.dumps(json_dict, indent=4)
 
             with open(rec_tail + ".json", "w") as f:

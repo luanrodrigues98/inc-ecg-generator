@@ -157,18 +157,32 @@ def displace_annotations(json_dict,displacement_x,displacement_y,pad_x,pad_y):
             corners = lead[key]
             names = list(corners)
             points = np.array([corners[name] for name in names],dtype=float)
-            rows,cols = invert_displacement(points[:,0] + pad_y,points[:,1] + pad_x,
+            rows,cols = invert_displacement(points[:,1] + pad_y,points[:,0] + pad_x,
                                             displacement_x,displacement_y)
             for index,name in enumerate(names):
-                corners[name] = [round(float(rows[index]) - pad_y,2),
-                                 round(float(cols[index]) - pad_x,2)]
+                corners[name] = [round(float(cols[index]) - pad_x,2),
+                                 round(float(rows[index]) - pad_y,2)]
         pixels = np.asarray(lead['plotted_pixels'],dtype=float)
         if pixels.size == 0:
             continue
-        rows,cols = invert_displacement(pixels[:,0] + pad_y,pixels[:,1] + pad_x,
+        rows,cols = invert_displacement(pixels[:,1] + pad_y,pixels[:,0] + pad_x,
                                         displacement_x,displacement_y)
-        lead['plotted_pixels'] = [[round(float(r) - pad_y,2),round(float(c) - pad_x,2)]
+        lead['plotted_pixels'] = [[round(float(c) - pad_x,2),round(float(r) - pad_y,2)]
                                   for r,c in zip(rows,cols)]
+
+    if 'gridpoints' in json_dict:
+        #Page-level, top-level annotation (not nested under 'leads'), same [x,y] /
+        #unpadded-render-frame convention as plotted_pixels above, so the identical
+        #pad-then-invert-then-unpad round trip applies unchanged. gridpoints_mask and
+        #gridpoints_reference_hw are untouched here: the mask is finalised once, after
+        #the whole pipeline, and the reference size is a page-level scalar pair that no
+        #per-point warp applies to.
+        points = np.asarray(json_dict['gridpoints'],dtype=float)
+        if points.size > 0:
+            rows,cols = invert_displacement(points[:,1] + pad_y,points[:,0] + pad_x,
+                                            displacement_x,displacement_y)
+            json_dict['gridpoints'] = [[round(float(c) - pad_x,2),round(float(r) - pad_y,2)]
+                                       for r,c in zip(rows,cols)]
 
 #Main function to deform and shade the sheet of paper
 def get_crumpled(input_file,resolution,crumple_amplitude,crumple_scale_cm,

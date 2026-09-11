@@ -207,19 +207,21 @@ def standardize_leads(full_leads):
 def rotate_bounding_box(box, origin, angle):
     angle = math.radians(angle)
 
+    #Transposed relative to the pre-(x,y) version of this function: the pairs this
+    #now receives are [x,y] (x first), and a plain rotation matrix is not symmetric
+    #under swapping which axis comes first - reusing the old [[cos,sin],[-sin,cos]]
+    #on [x,y] pairs would rotate every box the wrong way round.
     transformation = np.ones((2, 2))
     transformation[0][0] = math.cos(angle)
-    transformation[0][1] = math.sin(angle)
-    transformation[1][0] = -math.sin(angle)
+    transformation[0][1] = -math.sin(angle)
+    transformation[1][0] = math.sin(angle)
     transformation[1][1] = math.cos(angle)
 
-    new_origin = np.ones((1, 2))
-    new_origin[0, 0] = -origin[0]*math.cos(angle) + origin[1]*math.sin(angle)
-    new_origin[0, 1] = -origin[0]*math.sin(angle) - origin[1]*math.cos(angle)
     origin = np.reshape(origin, (1, 2))
+    new_origin = -np.matmul(origin, transformation)
 
-    transformed_box = np.matmul(box, transformation)    
-    transformed_box += origin + new_origin 
+    transformed_box = np.matmul(box, transformation)
+    transformed_box += origin + new_origin
 
     return transformed_box
 
@@ -360,23 +362,53 @@ def get_lead_pixel_coordinate(leads):
 def rotate_points(pixel_coordinates, origin, angle):
     rotates_pixel_coords = []
     angle = math.radians(angle)
+    #Transposed relative to the pre-(x,y) version - see rotate_bounding_box.
     transformation = np.ones((2, 2))
     transformation[0][0] = math.cos(angle)
-    transformation[0][1] = math.sin(angle)
-    transformation[1][0] = -math.sin(angle)
+    transformation[0][1] = -math.sin(angle)
+    transformation[1][0] = math.sin(angle)
     transformation[1][1] = math.cos(angle)
 
-    new_origin = np.ones((1, 2))
-    
-    new_origin[0, 0] = -origin[0]*math.cos(angle) + origin[1]*math.sin(angle)
-    new_origin[0, 1] = -origin[0]*math.sin(angle) - origin[1]*math.cos(angle)
     origin = np.reshape(origin, (1, 2))
-    
+    new_origin = -np.matmul(origin, transformation)
+
 
     for i in range(len(pixel_coordinates)):
         pixels_array = pixel_coordinates[i]
         transformed_matrix = np.matmul(pixels_array, transformation)
         transformed_matrix += origin + new_origin 
         rotates_pixel_coords.append(np.round(transformed_matrix, 2))
-        
+
     return rotates_pixel_coords
+
+def crop_transform_params(h, w, crop_sample):
+    #iaa.Crop(percent=crop_sample) with a plain scalar (not a tuple/StochasticParameter)
+    #crops the SAME fraction off every side, deterministically - no extra value is drawn
+    #from imgaug's RNG beyond crop_sample itself, so this is exactly reproducible from
+    #what get_augment already knows. With keep_size=True (imgaug's default, unchanged
+    #here) the cropped remainder is then resized back up to (h,w): a crop is therefore
+    #an offset (the top/left pixels removed) AND a scale (the zoom the resize-back-up
+    #applies), not just a translation.
+    crop_top = int(round(h * crop_sample))
+    crop_left = int(round(w * crop_sample))
+    remaining_h = h - 2 * crop_top
+    remaining_w = w - 2 * crop_left
+    scale_y = h / remaining_h if remaining_h > 0 else 1.0
+    scale_x = w / remaining_w if remaining_w > 0 else 1.0
+    return crop_top, crop_left, scale_y, scale_x
+
+def crop_points(pixel_coordinates, crop_top, crop_left, scale_y, scale_x):
+    #Undo iaa.Crop(percent=...,keep_size=True) analytically, the same offset-then-scale
+    #it applies to the pixels. Same list-of-per-lead-arrays shape as rotate_points, so
+    #the two compose directly: rotate_points(...) then crop_points(...).
+    cropped_pixel_coords = []
+    for i in range(len(pixel_coordinates)):
+        pixels_array = np.asarray(pixel_coordinates[i], dtype=float)
+        if pixels_array.size == 0:
+            cropped_pixel_coords.append(pixels_array)
+            continue
+        transformed = np.empty_like(pixels_array)
+        transformed[:, 0] = (pixels_array[:, 0] - crop_left) * scale_x
+        transformed[:, 1] = (pixels_array[:, 1] - crop_top) * scale_y
+        cropped_pixel_coords.append(np.round(transformed, 2))
+    return cropped_pixel_coords

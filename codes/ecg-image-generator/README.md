@@ -75,6 +75,8 @@ The basic mode of the tool creates ECG images without distortions. The mode of o
 - `--lead_name_bbox`: Store bounding box coordinates for the lead names in the json file under the attribute `text_bounding_box` in the config JSON file generated for every record (conditional); Add `--store_config` parameter to the command you are running. Note: Add `--store_config` parameter to the command you are running to save the config file with bounding box information. 
 - `--lead_bbox`:  Store bounding box coordinates for every individual ECG lead signal in the json file under the attribute `lead_bounding_box` in the config JSON file generated for every record (conditional). Note: Add `--store_config` parameter to the command you are running to save the config file with bounding box information. 
 
+     Every coordinate this generator writes - `plotted_pixels`, the four corners of `lead_bounding_box`/`text_bounding_box`, and `gridpoints` (`--store_gridpoints`) - is `[x, y]` pixel coordinates of the rendered PNG, x left-to-right and y top-to-bottom from the image's top-left corner. The JSON also carries a `coordinate_order` field (`"xy"`) recording this.
+
      **Example:** 
      ```bash
      python gen_ecg_images_from_data_batch.py -i <path_to_input_directory> -o <path_to_output_directory> -se 10 --lead_name_bbox --lead_bbox --random_add_header 0.8 --calibration_pulse 0.5 --store_config 1 --add_qr_code

@@ -1,0 +1,755 @@
+# Batch of 4000 ECG images from PTB-XL records100 (100 Hz, 10 s per record).
+#
+# Run with:
+#     .venv310/bin/python run_batch_from_config.py batch_ptbxl_3000.yaml
+#
+# Stage D of the roteiro is CLOSED and stage E is OPEN: as of increment 13 the page is
+# rendered above the resolution it is delivered at and integrated back down onto the
+# sensor grid. Exposure, white balance, the vignette, the contrast curve, the black/white
+# clipping points, the CIELAB chroma scaling and the a*/b* hue rotation are all set below,
+# and everything through the illumination gradient was already in place. The next
+# parameters in the roteiro are increment 14, sensor_noise, and increment 15, jpeg_q.
+#
+# MEASURED COST, and increment 13 changed it substantially. At supersample 3 the render
+# runs at 450-900 dpi for a page delivered at 150-300, and one image at the worst corner
+# of that range - 300 dpi out, 900 dpi in - was measured at 36 s wall clock. The ten-image
+# run in out/supersample_eval took 3 min 13 s over the whole 150-300 range, i.e. 19.3 s per
+# image and a 12.4 GB peak RSS, so budget roughly 21 HOURS for the full 4000 against the
+# ~4 h the same batch took at supersample 1. The OUTPUT budget is unchanged at ~48 GB, because the delivered
+# resolution did not move; what grew is the transient - the intermediate PNG reaches
+# ~100 MB at the top of the range and is rewritten by each of crumple, blur, illumination
+# and photometry.
+#
+# THE 12.4 GB IS THE NUMBER TO WATCH. The runner is serial, so that is the peak for the
+# whole process, but it is over half the memory available on this machine (22 GB free of
+# 30): do not run a second batch, or anything else large, alongside it. supersample 2 halves the wall clock
+# and the peak, and out/supersample_eval/RESULTADOS.md measures it as no worse than 3.
+#
+# Keys are the argparse DESTINATION names of gen_ecg_images_from_data_batch.py, not the
+# short flag spellings: rotate (not -rot), crease_angle (not -ca), handwriting_size_factor
+# (not --hws). An unknown key is a hard error, never a silent no-op. Any key left out
+# falls back to the tool's own default.
+
+# --- Corpus ------------------------------------------------------------------------
+input_directory: /home/luan-rodrigues/faculdade/inc-ecg-generator/sample-data/ptb-xl/1.0.3/records100
+# Flat: every PNG, JSON and WFDB copy lands directly here, with no mirrored subtree.
+# The record name is therefore the whole identity of a file, which is why the runner
+# refuses duplicate names.
+#
+# Absolute, so it does not follow the chdir to the generator root the way a relative path
+# would. It is its own directory under datasets/ rather than datasets/ itself, which
+# holds one directory per dataset alongside loose .parquet files - 12000 files at that
+# root would bury them.
+# NOT the ptbxl_synthetic_3000 directory the previous run filled: those 3000 images came
+# from a generator with no exposure, no white balance and no vignette, and the runner
+# writes flat, so a rerun would interleave two different datasets under one name.
+output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_4000
+
+# Each record is 1000 samples at 100 Hz = 10 s, and paper_len in config.yaml is 10 s, so
+# every record yields exactly one frame and one PNG. 3000 images therefore means the
+# first 3000 of the 23797 available records.
+#
+# The runner sorts the corpus before cutting, so the chosen 3000 is a function of the
+# corpus alone, not of filesystem order - unlike a bare batch run, where os.walk's
+# unsorted directory list decides it. Per-record characteristics are keyed by record
+# name, so they hold whatever the order.
+#
+# The runner also drops records whose name it has already seen. On this corpus that
+# removes records100/union, 1998 byte-identical copies of 01000-02999 that os.walk
+# happens to reach third - without the check they would enter the set a second time and,
+# in a flat output directory, overwrite the originals.
+max_num_images: 4000
+
+seed: 42
+config_file: config.yaml   # plotting constants (paper_len, layout, ticks)
+# num_leads is deliberately absent: it is declared in both parsers and never read, like
+# temperature, deterministic_rot, deterministic_temp and deterministic_crop. The lead
+# count comes from the WFDB header. Setting it here would look meaningful and do nothing.
+
+# ====================================================================================
+# PER-RECORD RANDOMISATION
+# ====================================================================================
+# Everything here is drawn once PER RECORD, from an RNG keyed by (seed, record name).
+# The batch driver already varies crumple, blur, noise, rotation, crease angle and
+# colour temperature per image on its own; what it cannot vary is layout, trace geometry
+# and resolution, which are one value for the whole run. Without this block 3000 images
+# share a single skeleton and differ only in how they are degraded.
+#
+# Three forms are accepted:
+#     choice:  [a, b, c]     one of the listed values; repeat a value to weight it
+#     uniform: [low, high]   float
+#     randint: [low, high]   integer, both ends inclusive
+#
+# A key may appear here OR as a fixed value above, never both.
+randomize:
+
+  # Layout. 4 columns is the standard 3x4 (each column a different 2.5 s window),
+  # 2 is 6x2 at 5 s, 1 is 12x1 at the full 10 s. lead_length_in_seconds is
+  # paper_len / columns, so the layout also changes how much signal each trace shows.
+  # To bias the mix towards the most common clinical layout, repeat it: [4, 4, 4, 2, 1].
+  num_columns:
+    choice: [1, 2, 4]
+
+  # Grid colour, by index into the standard ECG paper palette:
+  # 1 brown, 2 pink, 3 blue, 4 green, 5 red, 6 black. Restricted to the red / pink / black
+  # family: 5 and 2 dominate real paper; 6 is the grey rule the bw path uses (major
+  # 0.4/0.4/0.4, minor 0.75/0.75/0.75), which sits clear of the near-black trace. Brown,
+  # blue and green (1, 3, 4) stay in the palette but are no longer drawn here - re-weight
+  # or restore them by editing the choice list. This is deliberately NOT random_grid_color,
+  # which bypasses the palette entirely and samples RGB freely - grids no ECG paper has.
+  standard_grid_color:
+    choice: [5, 5, 5, 5, 2, 2, 2, 2, 6]   # ~44% red, ~33% pink, ~22% black
+
+  # Print resolution. Set here rather than through random_resolution, which ignores this
+  # block and draws from range(50, resolution + 1) - unreadable at the bottom and
+  # enormous at the top. 150-300 dpi spans a realistic phone-photo-to-scan range and
+  # keeps the output budget predictable.
+  #
+  # SINCE INCREMENT 13 THIS IS THE OUTPUT dpi, and only the output dpi. The page is
+  # RENDERED at resolution * supersample - see the stage E block below - and integrated
+  # down to this before the sensor noise. The key did not change meaning: 150-300 still
+  # describes the images that come out of this batch, which is what keeps every earlier
+  # evaluation under out/ comparable with it. What changed is that the render is now
+  # three times finer than the delivery.
+  resolution:
+    # CALIBRATED 2026-09-10 [direct]: direct from px_per_mm_est on 104 real images; dpi P5-P95 116-371 (median 301); previous [150, 300]
+    # WARNING: dpi is of the paper as photographed; equals print dpi only if the sheet fills the frame
+    # WARNING: projected batch cost at this dpi: 4.7 h and 55 GB for 4000 images (was 4.0 h / 46 GB)
+    randint: [116, 300]
+
+  # Trace geometry, in paper millimetres and therefore invariant to the resolution above.
+  # NOTE on the 0.05 floor: thickness in pixels is thickness_mm * dpi / 25.4, so 0.05 mm
+  # is 0.6 px at 300 dpi and 1.2 px at 600 - a sub-pixel stroke that anti-aliases into a
+  # faint grey line rather than a black one. Roughly the bottom 15% of this range lands
+  # under 1.5 px at the low end of the dpi range, so a few hundred of the 3000 images
+  # will have a very faint trace. Raise the floor to 0.20 (the documented useful range)
+  # if the digitiser needs every trace solidly visible.
+  trace_thickness_mm:
+    # NEEDS SWEEP 2026-09-10: no generated batch to fit a response curve; target gradient_mean P5-P95 35.31 to 102.2
+    uniform: [0.05, 0.55]     # documented useful range 0.20-0.60
+  trace_thickness_jitter:
+    # NEEDS SWEEP 2026-09-10: stylus-pressure modulation; no isolated attribute
+    uniform: [0.05, 1.0]     # stylus-pressure modulation, as a fraction of thickness
+  trace_dropout_rate:
+    # NEEDS SWEEP 2026-09-10: no generated batch to fit a response curve; target glcm_homogeneity P5-P95 0.5429 to 0.7595
+    uniform: [0.0, 0.8]       # dropouts per cm of arc length; range 0-1.5
+  trace_dropout_length_mm:
+    # NEEDS SWEEP 2026-09-10: no isolated measurable attribute; the roteiro names none
+    uniform: [0.1, 0.9]       # mean gap length, exponentially distributed
+
+  # Dominant wavelength of the crumple height field; the amplitude stays per-image below.
+  crumple_scale_cm:
+    # NEEDS SWEEP 2026-09-10: dominant wavelength; not separable from amplitude in one statistic
+    uniform: [0.0, 12.0]      # range 3-15
+
+  # Camera exposure, as a linear-light gain. Range chosen from the measured sweep in
+  # out/exposure_eval/RESULTADOS.md, by EQUAL STRUCTURAL COST at the two ends: the 1 mm
+  # grid keeps 76% of its amplitude at 0.50 and 79% at 1.15.
+  #
+  # It is capped well below the 0.3-2.5 the roteiro suggests, and the reason is specific
+  # to ECG paper. Over- and underexposure do not fail the same way. Below 1.0 the trace
+  # and the grid dim together and proportionally - nothing is lost, the range is only
+  # compressed. Above 1.0 they diverge: the grid is a light red line on white, so its
+  # modulation lives in the top of the range and the highlight clip eats it first, while
+  # the black trace sits at the bottom and survives. Measured at exposure 2.5 the trace
+  # still holds 96% of its contrast and the 1 mm grid is down to 12%. That is the worst
+  # failure a digitiser can be handed: an image that still looks readable and has lost
+  # its millimetre scale, with lum_mean and contrast_rms both sitting at plausible
+  # values. 1.15 is where the grid has given up about as much as 0.50 costs it.
+  #
+  # The midpoint lands at 0.82 rather than 1.0, which is also what a real meter does: a
+  # camera metering a mostly white sheet aims at mid grey and underexposes it.
+  #
+  # One coupling the roteiro treats as absent: blur_sigma decides how much overexposure
+  # the trace can take. A defocused trace has no pure black pixel left - every dark pixel
+  # is an ink/paper mixture, and a gain pushes the paper half of it towards white. The
+  # sweep behind this range ran at blur_sigma 0.8; the 1.5 maximum below is stronger, so
+  # the ceiling here is if anything generous.
+  exposure:
+    # NEEDS SWEEP 2026-09-10: no generated batch to fit a response curve; target lum_mean P5-P95 205.5 to 237
+    uniform: [0.50, 1.15]     # roteiro range 0.3-2.5, narrowed on measurement
+
+  # Radial luminance falloff of the lens - the last parameter of stage D. Drawn HERE and
+  # not left to the per-image uniform(0, max) draw that crumple_amplitude, blur_sigma and
+  # illum_strength use, because that draw has no lower bound: half a batch would come out
+  # with a vignette too faint to see, which is the wrong sample to evaluate a new stage on.
+  # Choosing this path REQUIRES deterministic_vignette: true below, and the runner refuses
+  # the pair without it - otherwise the value drawn here becomes the maximum of a second
+  # draw inside run_single_file and the product of two uniforms piles up near zero.
+  #
+  # The range is measured, not guessed. Centre-minus-corner on the rendered page, at
+  # exposure 0.82 (tables in out/vignette_eval/RESULTADOS.md):
+  #     v 0.15 -> 15 levels    v 0.30 -> 30    v 0.45 -> 47    v 0.60 -> 66
+  # 0.10 is where the falloff stops being invisible against the grid, and 0.55 stays
+  # inside the roteiro's 0-0.6 and short of the 2.0% highlight clipping that v 0.60 adds.
+  vignette:
+    # NEEDS SWEEP 2026-09-10: no generated batch to fit a response curve; target lum_spatial_std_low P5-P95 1.407 to 7.246
+    uniform: [0.10, 0.55]     # roteiro range 0-0.6
+
+  # Tone curve, in display space - the last parameter of stage D. Drawn HERE rather than
+  # through contrast_jitter_log2 for the same reason exposure is: its neutral is a
+  # multiplier of 1.0, not 0, so the uniform(0, max) idiom does not fit, and setting both
+  # paths would draw twice. The runner refuses that pair.
+  #
+  # RANGE, measured in out/contrast_eval/RESULTADOS.md, and the two ends are limited by
+  # DIFFERENT things - which is why it is not symmetric on the multiplier.
+  #
+  # Below 1.0 the cost is exactly proportional and nothing clips: the 1 mm grid keeps
+  # 0.75 of its amplitude at c 0.75, 0.60 at c 0.60. That is what fixes the floor, on the
+  # same equal-structural-cost criterion that fixed the exposure range above.
+  #
+  # Above 1.0 the grid amplitude RISES on a clean page - 1.79x at c 1.80, measured at
+  # exposure 0.82 - so the ceiling is not set there at all. It is set by the interaction
+  # with the top of the exposure range, and that is the finding of this increment. At
+  # exposure 1.15, 59.5% of the sheet is already clipped white before the curve runs, and
+  # the curve pushes the spike sitting just under white over the edge: 75.9% clipped at
+  # c 1.15, 82.8% at 1.30, and the grid amplitude FALLS instead of rising - 0.96 at
+  # c 1.15, 0.90 at 1.30, 0.87 at 1.80. On a clean page contrast recovers the grid; on an
+  # already-blown one it finishes it off. 1.35 is where the brightest records give up
+  # about as much grid as c 0.75 costs the rest.
+  #
+  # Nearly log-symmetric (-0.415 / +0.433 in log2), which is the axis the parameter is
+  # drawn on when contrast_jitter_log2 is used instead of this block.
+  contrast:
+    # NEEDS SWEEP 2026-09-10: no generated batch to fit a response curve; target contrast_rms P5-P95 17.84 to 40.38
+    uniform: [0.75, 1.35]     # roteiro range 0.6-1.8, narrowed on measurement
+
+  # Shadow and highlight clipping, the last two parameters of stage D. Drawn HERE rather
+  # than through the per-image draws inside run_single_file, for the same reason the
+  # vignette is: those draws are uniform(0, black_point) and uniform(white_point, 1.0), so
+  # a value drawn here would become the BOUND of a second draw and the product of two
+  # uniforms piles up at the neutral end - near 0 for the black point, near 1.0 for the
+  # white one - leaving most of the batch with almost no clipping whatever range was
+  # declared. Choosing this path REQUIRES the two deterministic_* switches below, and the
+  # runner refuses the pair without them.
+  #
+  # THE PAIR IS DRAWN INDEPENDENTLY, WHICH IS THE OPPOSITE OF wb_r/wb_b, and deliberately.
+  # The white balance is refused under randomize: because a real illuminant has one degree
+  # of freedom - warm light is high r AND low b - so two independent uniforms make a lamp
+  # that does not exist. These two are the case the roteiro calls "effectively decoupled
+  # from each other", and physically they are: where the shadows bottom out and where the
+  # highlights blow are separate facts about a photograph. The only thing independence
+  # allows is a degenerate pair, and the runner checks the WORST CASE combination -
+  # max(black_point) against min(white_point) - against LEVELS_MIN_SPAN rather than the
+  # declared midpoints. Here that worst case is 0.90 - 0.10 = 0.80, sixteen times the floor.
+  #
+  # RANGE: the roteiro's own 0-0.10 and 0.90-1.0, KEPT WIDE ON PURPOSE, and this is the one
+  # parameter of stage D whose range was NOT narrowed on measurement the way exposure
+  # (0.3-2.5 -> 0.50-1.15) and contrast (0.6-1.8 -> 0.75-1.35) were. The narrowing criterion
+  # used there was equal structural cost, i.e. protect the millimetre grid. Here the choice
+  # was made the other way, for fidelity: photos of white paper under strong light really do
+  # blow out, that is the distribution this generator is trying to cover, and clipping is
+  # the only parameter in the chain that can produce it on demand.
+  #
+  # WHAT THAT COSTS, measured in out/clipping_eval/RESULTADOS.md and not hidden. The figure
+  # to read is the grid amplitude divided by the local paper level - scale free, and what a
+  # digitiser actually thresholds against; the raw amplitude RISES with the stretch and is
+  # misleading. On that metric white_point is neutral for the grid above 0.92 at any
+  # exposure that is not already blown, and the cost is concentrated in the bottom fifth of
+  # the range: 0.923 of the grid contrast at exposure 0.82 x white_point 0.90, and 0.565 at
+  # exposure 1.15 x 0.90, where 59.5% of the sheet is pure white before this stage even runs
+  # and the clipped fraction ends at 83.6%. Those records come out readable and without a
+  # recoverable millimetre scale, which the exposure block above calls the worst failure a
+  # digitiser can be handed. It is now a declared choice with a number beside it rather than
+  # a side effect - but it IS in this batch, and a digitiser trained on it will see such
+  # pages.
+  #
+  # ONE COUPLING THE ROTEIRO DOES NOT MODEL, and it is the finding of this increment:
+  # white_point is an absolute threshold in display space, but the page's white is not at a
+  # fixed place - the exposure decides where it sits. Measured paper level (p99), same
+  # render: exposure 0.50 -> 0.737, 0.82 -> 0.918, 1.00 and 1.15 -> 1.000. So one value of
+  # white_point means three different operations across this batch: at exposure 0.50 the
+  # whole 0.90-1.0 range clips NOTHING and only stretches (lum_mean +11% at 0.90), at 0.82
+  # the knee sits at 0.92 and 0.90 clips 31%, and at 1.15 every value in the range clips
+  # more than 60%. The blowout is therefore produced by the PAIR (exposure, white_point) and
+  # not by white_point alone.
+  black_point:
+    # NEEDS SWEEP 2026-09-10: no generated batch to fit a response curve; target dark_pixel_pct P5-P95 0.01361 to 1.461
+    uniform: [0.0, 0.10]      # roteiro range 0-0.10, kept
+  white_point:
+    # NEEDS SWEEP 2026-09-10: no generated batch to fit a response curve; target clip_highlights_pct P5-P95 0.02711 to 27.04
+    uniform: [0.90, 1.0]      # roteiro range 0.90-1.0, kept
+
+  # Chroma scaling in CIELAB - the last parameter of stage D. Scales a* and b*, which leaves
+  # L* untouched by construction, so this is the first stage since the crumple that needs no
+  # mean-preserving solve: exposure keeps sole ownership of lum_mean by algebra rather than by
+  # bisection. Measured drift across this range: 0.53% in lum_mean, 0.44% in lab_L_mean.
+  #
+  # ALLOWED UNDER randomize: WITHOUT A deterministic_ SWITCH, unlike vignette, black_point and
+  # white_point just above. Those three are one-sided with a neutral at an end, so
+  # run_single_file draws uniform(0, value) INSIDE them and the two draws compound. Saturation
+  # is neutral at 1.0 and two-sided, so its per-image path is saturation_jitter_log2 - the
+  # contrast idiom - and that key is deliberately absent here. The runner refuses the pair.
+  #
+  # RANGE: the roteiro's own 0.5-1.5, KEPT WHOLE, and this is the second parameter of stage D
+  # not narrowed on measurement - but for the opposite reason to black_point/white_point. There
+  # the cost to the grid was real and was accepted for fidelity. Here there is no cost to
+  # accept: grid amplitude in greyscale is a shallow U with its MINIMUM at the neutral, 1.034
+  # at 0.5 and 1.025 at 1.5, so scaling the chroma either way slightly HELPS the millimetre
+  # grid rather than eroding it. The criterion that narrowed exposure (0.3-2.5 -> 0.50-1.15)
+  # and contrast (0.6-1.8 -> 0.75-1.35) simply does not bind on this parameter. Verified
+  # visually at both ends as the roteiro demands: the grid stays unambiguously red/pink, with
+  # no hue drift - see out/saturation_eval/_comparativo_varredura.png.
+  # The ceiling is 1.5 and not higher because that is where two independent limits agree: past
+  # it lum_mean drift crosses 1% (-1.00% at 2.0, exposure 1.15) and the grid finally does move
+  # (1.362).
+  #
+  # THE COUPLING THIS INCREMENT FOUND, and it is the one to carry forward: the chroma REQUESTED
+  # and the chroma DELIVERED diverge with exposure, because a brighter page leaves less gamut
+  # headroom above the grid and the clip on the way back from Lab eats the difference. Grid
+  # chroma relative to neutral at saturation 1.5: exposure 0.50 -> 1.492, 0.82 -> 1.465,
+  # 1.15 -> 1.182. Below 1.0 the parameter is exact at every exposure. Above it, the effective
+  # gain of this lever falls by a third at the top of the exposure range, so one value of
+  # saturation does NOT mean one amount of colour across this batch - the PAIR decides, exactly
+  # as it does for (exposure, white_point). Tables in out/saturation_eval/RESULTADOS.md.
+  #
+  # WHY THE FLOOR IS 0.5 AND NOT 0. Both get_exposed and the runner ACCEPT saturation 0 - it
+  # is a legitimate setting, unlike contrast 0, because it collapses only the chroma and
+  # leaves every bit of the luminance structure intact. What it produces is a black-and-white
+  # photograph of an ECG. That is a real thing, but it is not this batch: THIS IS A COLOUR
+  # BATCH, and the black-and-white path is random_bw, which is documented at the bottom of
+  # this file as needing a separate run rather than being mixed in here. A range whose floor
+  # reached 0 would quietly post greyscale pages into a colour set through a different door.
+  # 0.5 is where the grid is pale and still unambiguously red; below that it stops being the
+  # parameter's job and starts being random_bw's.
+  saturation:
+    # NEEDS SWEEP 2026-09-10: no generated batch to fit a response curve; target colorfulness P5-P95 8.259 to 74.83
+    uniform: [0.5, 1.5]       # roteiro range 0.5-1.5, kept; floor is 0.5 by choice, not by bound
+
+  # Hue rotation in the a*/b* plane of CIELAB - the parameter that CLOSES stage D. It shares
+  # the plane, the Lab round trip and the code block with the saturation above: a scale is
+  # s*I, a rotation is R, the two commute, so they fold into one matrix and cost one
+  # conversion between them.
+  #
+  # ALLOWED UNDER randomize: WITHOUT A deterministic_ SWITCH, for the saturation's reason and
+  # not the vignette's. vignette, black_point and white_point are one-sided with a neutral at
+  # an end, so run_single_file draws uniform(0, value) INSIDE them and the two draws compound.
+  # A rotation is bilateral, so its per-image path is hue_rotation_jitter_deg - the contrast
+  # idiom - and that key is deliberately absent here. The runner refuses the pair.
+  #
+  # RANGE: the roteiro's own -8 to +8, and this is the ONE parameter of stage D whose range
+  # was set by measuring the real corpus rather than by narrowing the roteiro's box on the
+  # generated one. The roteiro asks for exactly that, and the measurement contradicts the
+  # assumption behind its own suggestion in two ways.
+  #
+  #   hue_mean_deg              circular mean   circular std
+  #   real, 8793 photographs         10.5 deg       41.0 deg
+  #   generated, this chain         330.1 deg       75.4 deg
+  #
+  # (Real corpus: notebooks/features_imagens.csv, the physionet set. Generated: 40 images of
+  # ptbxl_synthetic_4000 at full resolution, with the same saturation-weighted circular mean
+  # the notebook's f_cor uses. Both measured the same way - the statistic is grid-dominated,
+  # so a downscaled read would not compare.)
+  #
+  # FIRST, THE SPREAD IS ALREADY 1.8x TOO WIDE. The roteiro reaches for this parameter to add
+  # hue variation; this batch does not need any. A +/-8 draw adds about 0.4 deg in quadrature
+  # to a spread of 75, which is the point - it is there to be a lever for a future
+  # calibration, not to widen anything today.
+  #
+  # SECOND, AND THIS IS THE FINDING TO CARRY FORWARD: what is genuinely wrong is the CENTRE,
+  # by about 40 degrees, and it does NOT belong to this parameter. Closing it here would take
+  # about +30, and at +30 the red grid measures (192,137,109) and reads as tan - the exact
+  # domain failure the roteiro warns about. A page cast is the white balance's business; a
+  # rotation drags the grid along with it. The wb_r/wb_b draw moves the illuminant along the
+  # DAYLIGHT LOCUS, which is one degree of freedom, and the real photographs sit beside that
+  # curve rather than on it. Whoever picks up increment 13 should look at the locus, not here.
+  #
+  # VERIFIED VISUALLY AT THE LIMITS, as the roteiro demands. The batch now draws
+  # standard_grid_color ~44% red, ~33% pink, ~22% black; black is greyscale and inert under
+  # hue rotation, so red is the only drawn entry the rotation can drag. The readings below
+  # (including the +/-15 blue note) are retained - they still describe those palette entries:
+  #   red major   -8 deg (255,0,37) red        +8 deg (243,49,0) red-orange
+  #   pink major  -8 deg (252,203,226) pink    +8 deg (255,202,215) pink
+  # At +/-15 the red one reaches (232,69,0), which reads orange, and the blue one turns
+  # violet. That is where the ceiling came from - not from the roteiro's figure, which the
+  # measurement happens to confirm.
+  hue_rotation:
+    # CALIBRATED 2026-09-10 [direct]: dispersion from 104 real images; circular std 27.2 deg around mean 20.4 deg; previous [-8.0, 8.0]
+    # WARNING: lower end -27.21 clamped to -8
+    # WARNING: upper end 27.21 clamped to 8
+    uniform: [-8, 8]          # roteiro range -8 to +8, confirmed by measurement; hard bound is +/-90
+
+  # Upstream crease/wrinkle texture, on roughly a third of the batch.
+  # Not on all of it, because the stage is degenerate: get_creased quilts with
+  # block_size 250 and num_block (1,1), so L2OverlapDiff returns 0 for every candidate
+  # and argmin always takes index 0. The result is the top-left 250x250 corner of one
+  # wrinkle photo stretched over the whole page - very strong, smooth diagonal bands
+  # that bury the trace at high amplitude. Only the choice of wrinkle file varies.
+  # The crumple stage below is the physically correct version of the same idea and is
+  # the one to lean on; this is kept as a minority texture for variety.
+  wrinkles:
+    choice: [false, false, true]
+
+# ====================================================================================
+# FIXED FOR THE BATCH
+# ====================================================================================
+
+# --- Page and layout ---------------------------------------------------------------
+pad_inches: 0
+print_header: false        # see random_print_header below for the varied version
+
+# NAME INVERSION, read carefully: remove_lead_names is action="store_false" with
+# default True, and its value is passed straight through as add_lead_names. So
+# true = lead names ARE drawn (the default), false = they are removed. The key reads
+# as the opposite of what it does.
+remove_lead_names: true
+
+# Blank space between the columns of a grid layout, replacing the upstream black
+# lead-separator tick. Upstream butts the 3x4 columns flush together and prints a short
+# vertical black mark at every seam; column_gap_mm opens a real gap there instead and
+# drops the mark. The gap shows grid paper without a trace, which is what a real ECG with
+# wider column spacing looks like.
+#
+# column_gap_mm is the BASE width; column_gap_jitter_mm is a per-image half-width draw
+# added to it, on its own RNG stream inside run_single_file (keyed like the trace-width
+# stream, so it never disturbs the draws that pick grid colours). Each of the three seams
+# is drawn independently, so the gaps differ across a row; the same three are reused for
+# every row, so they line up as clean vertical channels.
+#
+# NOT UNDER randomize:, for the two reasons sensor_noise is not either. A base drawn per
+# record AND jittered per image is a double draw that widens the range past what is
+# written here; and randomize: consumes its keys from one per-record stream in
+# ALPHABETICAL order, so a column_gap_* key there would re-roll every trace_* key, the
+# vignette and the wrinkles of the whole batch.
+#
+# WIDTH IS HELD FIXED: the gaps come out of the side margin and the widened column block
+# is re-centred, so the page size does not change. Each seam is capped so the block still
+# clears a ~5 mm side margin - on the standard 3x4 that cap is about 4.8 mm per seam, so a
+# base+jitter that can exceed it is clamped (the realised widths are written to the
+# annotation as column_gap_mm when store_config is 2).
+#
+# NOT CALIBRATED against the corpus - the real sheets were not measured for this. Values
+# below are a modest visible separation; sweep or adjust if the digitiser needs more or
+# less. Set column_gap_mm to null (or remove both keys) to restore the black tick.
+column_gap_mm: 2.5
+column_gap_jitter_mm: 2.0   # per-image, per-seam; effective range ~0.5-4.5 mm, then capped
+
+# Vertical distance between a grid lead's name (I, II, V1 ...) and its own trace baseline.
+# Upstream fixes this at 7 mm (lead_name_offset + 0.2 data units) for every label of every
+# image, so V1 sits close under its trace and a large downward deflection can touch the
+# text. lead_name_gap_mm is the BASE distance; lead_name_gap_jitter_mm is a half-width
+# uniform draw added to it, on its own RNG stream inside ecg_plot keyed like the
+# trace-width and column-gap streams, so it never disturbs the draws that pick grid
+# colours. The draw is made ONCE PER FRAME and every grid label in that frame shifts
+# together - unlike column_gap_jitter_mm, which draws per seam. The realised distance is
+# floored at 2 mm so a large negative draw cannot push a label onto its baseline.
+#
+# NOT UNDER randomize:, for the same two reasons column_gap_* is not: a per-record base
+# plus a per-frame jitter is a double draw, and randomize: consumes its keys from one
+# per-record stream in ALPHABETICAL order, so lead_name_gap_* there would re-roll every
+# draw that sorts after it. Only the grid layout is affected; the full-width rhythm strip
+# keeps its own fixed geometry. Set lead_name_gap_mm to null (or remove both keys) to
+# restore the upstream 7 mm.
+lead_name_gap_mm: 10.0
+lead_name_gap_jitter_mm: 2.0   # per-frame, all grid labels; effective range 8-12 mm
+
+# --- Annotations ---------------------------------------------------------------------
+# 2 records the distortion parameters actually applied per image (noise, crop, rotation,
+# temperature, grid colours, crumple amplitude, blur sigma, columns) on top of the
+# geometry. That per-image record is what makes a varied batch usable: without it there
+# is no way to know what any given image was rendered with.
+#
+# SIZE, measured rather than assumed: the JSON runs ~380 KB per image against several MB
+# per PNG. The annotation is a few percent of the output, so dropping to level 1 to save
+# disk trades away the parameter record for almost nothing. The PNGs are the disk cost,
+# and the levers on them are resolution and noise.
+store_config: 2
+lead_bbox: true            # NB: a true here forces crop to 0 inside the augment stage
+lead_name_bbox: true
+
+# --- Stage B, substrate: the sheet ---------------------------------------------------
+# crumple_amplitude is a MAXIMUM, drawn per image by the driver from uniform(0, value)
+# unless deterministic_crumple is set.
+# NEEDS SWEEP 2026-09-10: no generated batch to fit a response curve; target lum_spatial_std_mid P5-P95 4.003 to 14.02
+crumple_amplitude: 0.6     # 0 disables the stage entirely; range 0-1.0
+illum_azimuth_deg: -1      # -1 draws one azimuth per record, keyed by record name
+                           # Shared with Stage D below: one light direction per image.
+
+# crease_angle and both crease counts are already sampled per image by the driver, since
+# the matching deterministic_* flags are left off. They apply only on the records where
+# the randomize block turned wrinkles on.
+crease_angle: 90
+num_creases_vertically: 10
+num_creases_horizontally: 10
+
+# --- Stage C, optics -----------------------------------------------------------------
+# Also a per-image MAXIMUM, drawn from uniform(0, value) unless deterministic_blur.
+# In PIXELS AT THE RENDER RESOLUTION, not in mm: unlike the trace and crumple settings
+# this one is NOT invariant to resolution, so it is a slightly different physical blur
+# at each dpi the randomize block draws.
+# NEEDS SWEEP 2026-09-10: no generated batch to fit a response curve; target fft_high_freq_ratio P5-P95 0.0006373 to 0.009399
+blur_sigma: 1.5            # range 0-3.0
+
+# --- Stage D, scene illumination -----------------------------------------------------
+# Window light or a lamp off to one side: a mask with a linear ramp along
+# illum_azimuth_deg plus the quadratic falloff of a nearby source, multiplied in linear
+# light. Also a per-image MAXIMUM, drawn from uniform(0, value) unless
+# deterministic_illum. The value is in STOPS at the 90th percentile of the falloff, not a
+# fraction and not the gain at the brightest pixel: on a page where 43% of the paper is
+# already clipped white, scaling on the peak spends the whole range where nothing can
+# show it. The mask is exponential, so it cannot reach zero and never crushes a region.
+# Blown highlights grow with the value - 43% of the sheet at 0, 56% at 0.52, 69% at 1.3.
+# That is what a real photo of white paper under a strong side light does, but if the
+# target set is more evenly lit, stay under about 0.5.
+# NEEDS SWEEP 2026-09-10: no generated batch to fit a response curve; target lum_center_edge_diff P5-P95 -7.281 to 3.157
+illum_strength: 0.4        # 0 disables the stage entirely; range 0-1.3
+
+# --- Stage D, exposure ---------------------------------------------------------------
+# The gain the camera applied to the light the illumination above put on the sheet,
+# multiplied in linear light. Unlike every parameter before it this one is NOT a maximum
+# drawn from uniform(0, value): a gain is neutral at 1.0, not at 0, and its range is two
+# sided, so it is randomised here in the randomize block instead. exposure_jitter_stops
+# stays at its default of 0 and is deliberately absent - it is the per-image draw for
+# running the batch driver WITHOUT this runner, and setting both would draw twice. The
+# runner refuses that combination rather than silently widening the distribution.
+#
+# It is the only stage in the chain meant to move lum_mean. The crumple and the
+# illumination both undo their own effect on the mean, and the blur conserves energy in
+# linear light, so that the brightness of the page has a single owner - and so does the
+# white balance below, which corrects its own effect on the luminance for the same reason.
+
+# --- Stage D, white balance ----------------------------------------------------------
+# The colour of the light, as two per-channel gains in linear light, fused into the
+# exposure stage because every stage boundary here is a uint8 PNG and the whole cast being
+# modelled is only about ten levels wide.
+#
+# THE PAIR IS NOT IN THE randomize BLOCK, AND THAT IS THE POINT. randomize: draws every
+# key from its own independent uniform, and the roteiro forbids exactly that for these two:
+# a real illuminant has ONE degree of freedom, warm light being high r AND low b, so
+# independent draws would produce the (high r, high b) corner - a lamp that is
+# simultaneously warm and cool. wb_mired_jitter is the correlated draw, along the CIE
+# daylight locus, made inside run_single_file. The runner refuses wb_r, wb_b or
+# wb_mired_jitter under randomize: rather than silently decorrelating them.
+# This inverts the arrangement used for exposure one block up, where the randomize block
+# is the per-record draw and the jitter is for running the driver without this runner.
+# The inversion is deliberate and is forced by the correlation requirement.
+#
+# The draw is uniform in MIREDS (reciprocal megakelvin), not in kelvin: 500 K is an
+# enormous shift at 3000 K and invisible at 15000 K, while a mired is roughly the same
+# perceived step everywhere. Same reasoning that put the exposure jitter in stops.
+#
+# RANGE, from the measured sweep in out/wb_eval/RESULTADOS.md against the corpus figures
+# in feat/distribution-params (calibration/attribute_map.py). The real corpus is WARM ON
+# ONE SIDE ONLY - wb_b_over_g p05-p95 is 0.925-1.046, centred just below 1 - and the sweep
+# maps those three figures onto -17.3, +4.2 and +26.1 mireds. So the centre sits 4 mireds
+# warm of D65 rather than on it, and the half width is 22.
+#   wb_r/wb_b below are daylight_gains(+4 mired) = 6339 K, the centre.
+#   +/- 22 mireds spans 7366 K to 5563 K, i.e. net gains wb_r 0.933-1.110, wb_b 0.845-1.120.
+# Both stay inside the roteiro box of 0.85-1.20, and the grid is still unambiguously
+# red/pink at both ends - checked on the two box corners in the sweep.
+#
+# ONE COUPLING THE ROTEIRO DOES NOT MODEL, and it is the finding of this increment:
+# highlight clipping destroys white balance authority, ASYMMETRICALLY. Measured at +/- 30
+# mireds, the shift in lab_b is +/- 10.4 at exposure 0.82 (no clipping), but only -3.0/+5.3
+# at exposure 1.15 and -0.9/+1.4 at 1.60. Cooling means RAISING blue on paper that is
+# already at white and has nowhere to go; warming means lowering it, which always works.
+# The exposure range above reaches 1.15, so the brightest images of this batch carry a
+# visibly weaker cast than the darkest ones. That is physically correct - it is also why
+# the real corpus is warm on one side only - but it means the two parameters are coupled
+# and the achieved spread is narrower than the sweep alone predicts.
+# CALIBRATED 2026-09-10 [direct]: direct from paper r/g,b/g on 104 real images, projected per image onto the daylight locus; centre 6459 K (+1.1 mired vs D65), P5-P95 half width 6.8 mired; previous 1.016
+wb_r: 1.0032               # daylight_gains(+4 mired); roteiro range 0.85-1.20
+# CALIBRATED 2026-09-10 [direct]: direct from paper r/g,b/g on 104 real images, projected per image onto the daylight locus; centre 6459 K (+1.1 mired vs D65), P5-P95 half width 6.8 mired; previous 0.9747
+wb_b: 0.9923               # daylight_gains(+4 mired); roteiro range 0.85-1.20
+# CALIBRATED 2026-09-10 [direct]: half width of the per-image mired distribution (6.8 mired); previous 22
+wb_mired_jitter: 7         # half width of the per-record draw along the daylight locus
+
+# --- Stage D, vignette ---------------------------------------------------------------
+# Radial luminance falloff of the lens, the last parameter of stage D. The strength itself
+# is in the randomize block above; this switch is what makes that legal. It turns OFF the
+# per-image uniform(0, max) draw inside run_single_file, so the randomize block becomes the
+# single per-record draw. Without it the two compound - a maximum drawn per record, then a
+# second draw inside it - and the product of two uniforms piles up near zero, so most of
+# the batch would carry almost no vignette whatever range was declared. The runner refuses
+# the pair rather than letting that through.
+#
+# Fused into the exposure stage rather than given one of its own, because linear_to_srgb
+# clips at 1.0 and every stage boundary is therefore a clip: applied afterwards it would
+# darken pixels the exposure had already flattened onto 255, and the 1 mm grid living in
+# those near-white values does not survive it. Measured at exposure 1.15 with 59.6% of the
+# page clipped, a separate stage kept only 73% of the corner grid amplitude the fused one
+# delivers. Tables in out/vignette_eval/RESULTADOS.md.
+deterministic_vignette: true
+
+# --- Stage D, contrast ---------------------------------------------------------------
+# The tone curve, and the first stage of the chain that acts in DISPLAY space rather than
+# in linear light - which is where the roteiro puts it and where contrast_rms is measured.
+# The strength itself is in the randomize block above; there is nothing to switch off here
+# the way deterministic_vignette switches off the vignette's inner draw, because contrast
+# has no uniform(0, max) draw inside run_single_file to begin with. Its per-image path is
+# contrast_jitter_log2, which stays at its default of 0 and is deliberately absent - it is
+# for running the batch driver WITHOUT this runner, and setting both would draw twice. The
+# runner refuses that combination rather than silently widening the distribution.
+#
+# THE ROTEIRO'S ANCHOR IS NOT THE ONE IMPLEMENTED, and the reason is measured. It asks for
+# the curve anchored at mid grey AND for lum_mean to stay within 2%. On a page whose
+# display mean is 0.857 - about 62% of this sheet is paper - those two cannot both hold:
+# the mid grey anchor moves lum_mean by -14.7% at c 0.6 and +16.7% at 1.8, and at 1.8 it
+# drives 68% of the page into pure white and takes the millimetre grid with it. The curve
+# is kept literal and the mean is restored by a solved offset, the same remedy the vignette
+# and the illumination already use. Measured drift across the whole 0.6-1.8 range: 0.31%.
+# So exposure remains the single owner of lum_mean, which is the invariant this whole
+# chain is built around.
+
+# --- Stage D, black and white point ---------------------------------------------------
+# Shadow and highlight clipping: out = clip((in - black_point)/(white_point - black_point),
+# 0, 1), in display space, after the tone curve. The strengths themselves are in the
+# randomize block above; these two switches are what makes that legal, exactly as
+# deterministic_vignette does for the vignette - they turn off the per-image draws inside
+# run_single_file so the randomize block becomes the single per-record draw.
+#
+# THIS IS THE FIRST STAGE IN THE CHAIN THAT DOES NOT PUT lum_mean BACK, and the reason is
+# algebraic rather than an oversight. Every stage before it ends in a bisection so that
+# exposure is the single owner of the page brightness. That remedy is unavailable here:
+# (in - bp)/(wp - bp) is a gain of 1/(wp - bp) plus an offset in display space, and the
+# contrast curve is a gain of c plus an offset ALREADY solved for a constant mean on the
+# same array - so solving this one the same way would collapse the pair onto
+# contrast = 1/(wp - bp) exactly, not approximately. A mean-preserving black/white point is
+# a provable duplicate of the contrast. The formula is therefore kept literal and this stage
+# moves lum_mean: measured +10.1% at white_point 0.90 (exposure 0.82) and -2.1% at
+# black_point 0.10. What it owns is the CLIP, not the mean.
+#
+# black_point IS IN THIS BATCH FOR A DIFFERENT REASON THAN THE ROTEIRO GIVES. The roteiro
+# pairs it with clip_shadows_pct, and on an ECG page that target is inert: the only dark
+# thing on the sheet is the trace - thin, anti-aliased and defocused by up to blur_sigma 1.5
+# - so the clipped-shadow fraction goes from 0.00% to 0.08% across the whole 0-0.10 range,
+# which is a few hundred pixels and not a calibratable signal. What the parameter does move,
+# monotonically and usefully, is the DEPTH OF THE TRACE: trace contrast 0.752 -> 0.818 at
+# exposure 0.82 and 0.611 -> 0.657 at 0.50, with dark_pixel_pct roughly tripling. That is
+# worth having in the batch - a photographed printout has a darker trace than a clean render
+# - but anyone porting this to the calibration solver should pair it with a trace statistic
+# and not with clip_shadows_pct.
+deterministic_black_point: true
+deterministic_white_point: true
+
+# Rhythm strip lead, printed full width under the grid: ALWAYS II, which is the clinical
+# default and the lead a rhythm strip is actually printed in. Previously drawn from
+# choice: [II, II, II, I, V1, V5], which put a quarter of the batch on a lead no real
+# twelve-lead printout uses for the strip. A record without II falls back to its first
+# available lead, so this is a preference and not a guarantee.
+# Fixed rather than a one-element choice: under randomize:, because random.choice of a
+# unit list still goes through _randbelow(1) - getrandbits(1) in a loop until it comes up
+# 0, a variable number of draws. A fixed key consumes nothing from the per-record stream.
+full_mode: II
+
+# --- Stage E, the sensor sampling grid -----------------------------------------------
+# The page is rendered at resolution * supersample and integrated down to resolution with
+# INTER_AREA, in linear light, immediately before the augment stage below.
+#
+# WHY THIS PAGE NEEDS IT more than most. The content is thin high-contrast lines: at the
+# 150 dpi bottom of the range above, a 0.35 mm trace is 2.1 px and the 1 mm minor grid is
+# 5.9 px with a hairline rule inside it, so rendering straight at the delivered resolution
+# decides the image by where each line happens to fall between pixel centres. A camera
+# does not sample the optical image, it integrates it over each photosite; this is that
+# integral, and it is also what the roteiro means by rendering 2-3x larger.
+#
+# MEASURED, in out/supersample_eval/RESULTADOS.md, against a 900 dpi render integrated
+# down to the same 150 dpi and treated as ground truth:
+#     supersample 1   RMSE 44.2 levels   PSNR 15.2 dB
+#     supersample 2   RMSE 18.4 levels   PSNR 22.8 dB
+#     supersample 3   RMSE 20.1 levels   PSNR 22.1 dB
+# So the stage works - factor 1 is 2.4x further from the physically correct page than
+# factor 2 - and THE RETURN SATURATES AT 2. Factor 3 is not measurably better than 2 on
+# this measurement and costs 2.25x the render. It is set to 3 here by explicit choice;
+# 2 is the cheaper setting with the same fidelity and changing it is this one line.
+#
+# NOTE ON THE ROTEIRO'S OWN VALIDATION, which does not hold and is not a defect. It asks
+# that sharp_laplacian_var and edge_density RISE with the factor and reads a fall as the
+# downscale being in the wrong position. On this page both FALL - 5533 -> 4001 and
+# 0.127 -> 0.118 - while the reference test above says the downscale is exactly where it
+# belongs. Both metrics measure high frequency ENERGY, and aliasing manufactures it: a
+# grid rule landing between two pixel centres at 150 dpi renders as one hard black pixel
+# against white, the largest second derivative a page can produce and completely wrong.
+# A metric that rewards aliasing cannot be the acceptance criterion for the stage that
+# removes it.
+#
+# FIXED, not under randomize:, and deliberately. The runner consumes the randomize keys
+# from a single per-record stream in ALPHABETICAL order, so a new key there shifts every
+# draw from resolution onward and the batch stops reproducing image by image. A fixed key
+# consumes nothing from that stream. It would also mix two qualities of content into one
+# training set, which is not a degradation the camera applies - it is a property of how
+# carefully the page was drawn.
+supersample: 2
+
+# The delivered pixel size, as an absolute override. 0 means derived: the render divided
+# by the supersample factor, i.e. exactly the size resolution asks for, which is what this
+# batch wants.
+#
+# THEY ARE ONE DEGREE OF FREEDOM, NOT TWO, and the runner refuses to draw both under
+# randomize: for the same reason it refuses wb_r with wb_b. On ECG paper a vertical
+# millimetre is 0.1 mV and a horizontal one is 40 ms, so scaling the two axes by different
+# factors changes mV per pixel and seconds per pixel by different amounts: the grid stops
+# being square and a digitiser reading the page recovers the wrong amplitude, the wrong
+# duration, or both. Set one and the render's own aspect ratio supplies the other.
+#
+# The roteiro asks for (output_width, output_height) pairs sampled jointly from the real
+# corpus. With the aspect ratio pinned the joint draw collapses to a single number, and
+# the measurement supports the pin: over the 8793 real photographs of the reference corpus
+# the median aspect ratio is 1.2954 against this paper's 11/8.5 = 1.2941. The 4:3 families
+# in that corpus are frames with a table and a background around the sheet, which this
+# generator does not render yet - background_* and perspective_* are the roteiro's own
+# deferred parameters, and until they exist an arbitrary camera frame here would only
+# stretch the page.
+output_width: 0
+output_height: 0
+
+# --- Sensor stage (upstream imgaug augment) ------------------------------------------
+# Rotation, gaussian noise and crop. Requires store_config >= 1, enforced by the runner
+# rather than left to crash mid-batch.
+#
+# Colour temperature IS controllable now, and is switched OFF here. temperature and
+# deterministic_temp were declared and never read upstream; the white balance increment
+# made them live. Left on, the stage draws 2000-4000 K or 10000-20000 K with even odds and
+# nothing between, which measured as a bimodal 75 unit spread in lab_b across ten images -
+# against about 10 units for the whole documented range of wb_r/wb_b above. Two stages
+# cannot own the colour of one photograph, so it belongs to the white balance.
+# temperature 0 REMOVES the step rather than setting a neutral kelvin, because imgaug's
+# table has no neutral entry: at 6500 K, the closest there is, white paper still comes out
+# [255, 249, 253].
+# NOTE: iaa.Affine fills the area exposed by rotation with black, so every rotated image
+# carries black triangular corners rather than a background. Keeping rotate small limits
+# how much of the frame that costs.
+augment: true
+deterministic_temp: true   # stops the 2000-4000 / 10000-20000 K draw; see above
+temperature: 0             # 0 removes the step entirely, leaving the cast to wb_r/wb_b
+rotate: 5                  # maximum absolute degrees; the draw is uniform in [-5, 5]
+
+# noise is a MAXIMUM, drawn per image over [1, noise].
+# DO NOT SET IT TO 0: the draw is random.choice(range(1, noise + 1)), which on an empty
+# range raises IndexError and kills the batch. 1 is the lowest usable value, and
+# augment: false is the way to switch the stage off.
+# It is also a disk lever - sensor noise defeats PNG's predictive compression.
+# NEEDS SWEEP 2026-09-10: no generated batch to fit a response curve; target noise_sigma P5-P95 0.8441 to 3.859
+noise: 25
+crop: 0.01                 # inert while lead_bbox is true, see above
+
+# --- Deliberately off ------------------------------------------------------------------
+# hw_text needs the scispaCy model en_core_sci_sm, which is not in requirements.txt;
+# without it the flag raises OSError [E050]. It also loads TensorFlow per image.
+hw_text: false
+add_qr_code: false
+fully_random: false        # would randomise hw_text/wrinkles/augment per image
+
+# --- Bernoulli switches ----------------------------------------------------------------
+# These feed scipy.stats.bernoulli, which draws from numpy's global RNG. The runner seeds
+# numpy and imgaug as well as `random`, so unlike a bare batch run these stay reproducible
+# at fractional values.
+calibration_pulse: 0.95    # fraction of images carrying the calibration pulse
+random_grid_present: 1     # 1 = every image gets the grid; digitisation needs it
+# random_print_header is 0 because PTB-XL cannot fill the block. generate_template.py
+# builds the printed patient header from the COMMENT lines of the .hea file, and these
+# records have none - the header is 12 signal specs and nothing else. Verified by
+# rendering it: the block comes out as the record id plus a bare "Name:" with no value.
+# At 0.3 that would be ~900 images carrying the same empty label. Raise it only for a
+# corpus whose headers actually carry demographics.
+random_print_header: 0
+
+# random_bw MUST STAY 0. It looks like an independent black-and-white probability, but
+# any non-zero value sends standard_colours to False for EVERY image, which bypasses the
+# palette and samples grid RGB freely - losing the standard_grid_color randomisation
+# above for the whole batch, colour images included. For black-and-white images, run a
+# second batch with random_bw: 1 rather than mixing them here.
+random_bw: 0
+random_grid_color: false   # false keeps the standard palette; true samples RGB freely
+random_resolution: false   # resolution comes from the randomize block instead
+random_padding: false

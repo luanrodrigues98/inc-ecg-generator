@@ -4,7 +4,7 @@ import argparse
 import imgaug as ia
 from imgaug import augmenters as iaa
 from imgaug.augmentables.bbs import BoundingBox, BoundingBoxesOnImage
-from helper_functions import read_leads, convert_bounding_boxes_to_dict, rotate_bounding_box, get_lead_pixel_coordinate, rotate_points
+from helper_functions import read_leads, convert_bounding_boxes_to_dict, rotate_bounding_box, get_lead_pixel_coordinate, rotate_points, crop_points, crop_transform_params
 import numpy as np
 import matplotlib.pyplot as plt
 import os, sys, argparse
@@ -67,18 +67,43 @@ def get_augment(input_file,output_directory,rotate=25,noise=25,crop=0.01,tempera
     images_aug = seq(images=images)
 
     if bbox:
-        augmented_lead_bbs = rotate_bounding_box(lead_bbs, [h/2,w/2], -rot)
+        augmented_lead_bbs = rotate_bounding_box(lead_bbs, [w/2,h/2], -rot)
     else:
         augmented_lead_bbs = []    
     if store_text_bounding_box:
-        augmented_leadName_bbs = rotate_bounding_box(leadNames_bbs, [h/2,w/2], -rot)
+        augmented_leadName_bbs = rotate_bounding_box(leadNames_bbs, [w/2,h/2], -rot)
     else:
         augmented_leadName_bbs = []   
 
-    rotated_pixel_coordinates = rotate_points(plotted_pixels, [h/2, w/2], -rot)
+    rotated_pixel_coordinates = rotate_points(plotted_pixels, [w/2, h/2], -rot)
+
+    #iaa.Crop(percent=crop_sample, keep_size=True) - the default, unchanged here - crops
+    #crop_sample off every side and then resizes the remainder back up to (h,w): an
+    #offset AND a scale, which nothing above this line accounts for. Previously only the
+    #rotation was corrected and plotted_pixels silently drifted out of alignment with
+    #the image whenever crop_sample > 0. crop_sample is a plain scalar (not a tuple or
+    #StochasticParameter), so all four sides crop by the same, already-known fraction -
+    #no extra imgaug RNG draw needs to be read back to reproduce it analytically.
+    crop_top, crop_left, crop_scale_y, crop_scale_x = crop_transform_params(h, w, crop_sample)
+    rotated_pixel_coordinates = crop_points(rotated_pixel_coordinates, crop_top, crop_left,
+                                            crop_scale_y, crop_scale_x)
 
     if bbox or store_text_bounding_box:
         json_dict['leads'] = convert_bounding_boxes_to_dict(augmented_lead_bbs, augmented_leadName_bbs, lead_bbs_labels, startTime_bbs, endTime_bbs, rotated_pixel_coordinates)
+
+    #--store_gridpoints ground truth. Top-level key, not nested under 'leads', so it is
+    #updated unconditionally here rather than being gated behind bbox/store_text_bounding_box
+    #the way the leads writeback above is.
+    if json_dict.get('gridpoints'):
+        gridpoints = rotate_points([json_dict['gridpoints']], [w/2, h/2], -rot)
+        gridpoints = crop_points(gridpoints, crop_top, crop_left, crop_scale_y, crop_scale_x)
+        json_dict['gridpoints'] = gridpoints[0].tolist()
+    if json_dict.get('gridpoints_reference_hw'):
+        #Rotation does not change the reference page size, only the crop-driven zoom
+        #does - the same per-axis scale the point transform above uses.
+        ref_h, ref_w = json_dict['gridpoints_reference_hw']
+        json_dict['gridpoints_reference_hw'] = [round(ref_h*crop_scale_y, 2),
+                                                round(ref_w*crop_scale_x, 2)]
 
     head, tail = os.path.split(filename)
 

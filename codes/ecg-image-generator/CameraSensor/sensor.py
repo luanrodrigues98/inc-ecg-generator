@@ -109,9 +109,9 @@ def resolve_output_size(render_width,render_height,supersample,output_width,outp
 
 def scale_annotations(json_dict,scale_x,scale_y):
     #Carry the stored geometry down with the pixels.
-    #Every coordinate this generator writes is [row, col], both for plotted_pixels
-    #(ecg_plot.py) and for the four corners of either bounding box, so the row component
-    #takes scale_y and the column component scale_x.
+    #Every coordinate this generator writes is [x, y], both for plotted_pixels
+    #(ecg_plot.py) and for the four corners of either bounding box, so the x component
+    #takes scale_x and the y component scale_y.
     #NO PADDING OFFSET IS NEEDED HERE, unlike in PaperCrumple.displace_annotations. The
     #annotations live in the frame of the unpadded render while the file may carry a
     #pad_inches border, but a uniform scale of the whole file scales the border with it: a
@@ -128,13 +128,26 @@ def scale_annotations(json_dict,scale_x,scale_y):
                 continue
             corners = lead[key]
             for name in list(corners):
-                row,col = corners[name]
-                corners[name] = [round(float(row)*scale_y,2),round(float(col)*scale_x,2)]
+                x,y = corners[name]
+                corners[name] = [round(float(x)*scale_x,2),round(float(y)*scale_y,2)]
         pixels = lead.get('plotted_pixels')
         if not pixels:
             continue
-        lead['plotted_pixels'] = [[round(float(row)*scale_y,2),round(float(col)*scale_x,2)]
-                                  for row,col in pixels]
+        lead['plotted_pixels'] = [[round(float(x)*scale_x,2),round(float(y)*scale_y,2)]
+                                  for x,y in pixels]
+
+    #--store_gridpoints ground truth: same [x,y] convention as plotted_pixels above,
+    #so the same per-axis scale applies unchanged. gridpoints_reference_hw is a page-
+    #level [H,W] pair rather than a point list, but the uniform-scale argument in this
+    #function's own docstring holds for it too - it is scaled directly.
+    gridpoints = json_dict.get('gridpoints')
+    if gridpoints:
+        json_dict['gridpoints'] = [[round(float(x)*scale_x,2),round(float(y)*scale_y,2)]
+                                   for x,y in gridpoints]
+    reference_hw = json_dict.get('gridpoints_reference_hw')
+    if reference_hw:
+        json_dict['gridpoints_reference_hw'] = [round(float(reference_hw[0])*scale_y,2),
+                                                round(float(reference_hw[1])*scale_x,2)]
 
     #The page level figures that are counted in pixels or in pixels per unit of paper.
     #Missing any of these leaves the annotation describing the render while the PNG beside

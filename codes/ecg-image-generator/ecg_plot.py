@@ -61,6 +61,13 @@ papersize_values = {'A0' : (33.1,46.8),
                     'letter' : (8.5,11)
                     }
 
+#The lattice spacing for the --store_gridpoints ground truth: one node per major (5mm)
+#grid square, matching what a UNet-based rectifier (e.g. hengck23's Kaggle notebook) is
+#trained to detect. Fixed, not a config.yaml knob - x_grid_size/y_grid_size already
+#denote exactly this 5mm step (see standard_values above), this constant only documents
+#that fact for readers of the emitted JSON.
+GRIDPOINT_MM_PER_STEP = 5.0
+
 
 def inches_to_dots(value,resolution):
     return (value * resolution)
@@ -222,6 +229,39 @@ def draw_trace(ax,x_vals,y_vals,color_line,trace_style,need_bbox):
     return Bbox([[np.nanmin(xy[:, 0]), np.nanmin(xy[:, 1])],
                  [np.nanmax(xy[:, 0]), np.nanmax(xy[:, 1])]])
 
+def build_gridpoints(ax, x_min, x_max, x_grid_size, y_min, y_max, y_grid_size, height):
+    #The --store_gridpoints ground truth: every major (5mm) grid-line intersection over
+    #the whole figure rectangle, in the same pixel convention as plotted_pixels.
+    #Reuses the exact tick arrays the grid itself is drawn from (np.arange(x_min,x_max,
+    #x_grid_size) / the y equivalent), so the lattice always matches what is actually on
+    #the page, whether or not show_grid draws it. No RNG use - ax.transData is already
+    #fixed by set_xlim/set_ylim, called well before this.
+    xs = np.arange(x_min, x_max, x_grid_size)
+    ys = np.arange(y_min, y_max, y_grid_size)
+    n_cols = len(xs)
+    n_rows = len(ys)
+
+    grid_x, grid_y = np.meshgrid(xs, ys)
+    transformed = ax.transData.transform(np.column_stack([grid_x.ravel(), grid_y.ravel()]))
+    px = transformed[:, 0]
+    py = height - transformed[:, 1]
+    #Flat, row-major over (n_rows,n_cols), [x,y] like plotted_pixels - same axis order
+    #hengck23's own .npy sidecar uses, so the JSON mirror and the .npy now agree.
+    gridpoints = [[round(float(x), 2), round(float(y), 2)] for y, x in zip(py, px)]
+
+    #Empirical pixel spacing of one 5mm step, read straight off the same transform
+    #rather than re-derived from x_grid_dots/y_grid_dots, so it stays correct even if
+    #those are redefined elsewhere. transData is affine here (pre-crumple), so any one
+    #step is representative.
+    origin = ax.transData.transform((x_min, y_min))
+    one_x_step = ax.transData.transform((x_min + x_grid_size, y_min))
+    one_y_step = ax.transData.transform((x_min, y_min + y_grid_size))
+    dx = abs(one_x_step[0] - origin[0])
+    dy = abs(one_y_step[1] - origin[1])
+    reference_hw = [round((n_rows - 1) * dy, 2), round((n_cols - 1) * dx, 2)]
+
+    return gridpoints, [n_rows, n_cols], reference_hw
+
 #Function to plot raw ecg signal
 def ecg_plot(
         ecg, 
@@ -265,6 +305,7 @@ def ecg_plot(
         lead_name_gap_jitter_mm=0.0,
         column_gap_mm=None,
         column_gap_jitter_mm=0.0,
+        store_gridpoints=False,
         seed=-1
         ):
     #Inputs :
@@ -551,10 +592,10 @@ def ecg_plot(
                 y1 = int(y1)
                 x2 = int(x2)
                 y2 = int(y2)
-                box_dict[0] = [round(json_dict['height'] - y2, 2), round(x1, 2)]
-                box_dict[1] = [round(json_dict['height'] - y2, 2), round(x2, 2)]
-                box_dict[2] = [round(json_dict['height'] - y1, 2), round(x2, 2)]
-                box_dict[3] = [round(json_dict['height'] - y1, 2), round(x1, 2)]
+                box_dict[0] = [round(x1, 2), round(json_dict['height'] - y2, 2)]
+                box_dict[1] = [round(x2, 2), round(json_dict['height'] - y2, 2)]
+                box_dict[2] = [round(x2, 2), round(json_dict['height'] - y1, 2)]
+                box_dict[3] = [round(x1, 2), round(json_dict['height'] - y1, 2)]
                 current_lead_ds["text_bounding_box"] = box_dict
 
         current_lead_ds["lead_name"] = leadName
@@ -612,10 +653,10 @@ def ecg_plot(
             y1 = int(y1)
             x2 = int(x2)
             y2 = int(y2)
-            box_dict[0] = [round(json_dict['height'] - y2, 2), round(x1, 2)]
-            box_dict[1] = [round(json_dict['height'] - y2, 2), round(x2, 2)]
-            box_dict[2] = [round(json_dict['height'] - y1, 2), round(x2, 2)]
-            box_dict[3] = [round(json_dict['height'] - y1, 2), round(x1, 2)]
+            box_dict[0] = [round(x1, 2), round(json_dict['height'] - y2, 2)]
+            box_dict[1] = [round(x2, 2), round(json_dict['height'] - y2, 2)]
+            box_dict[2] = [round(x2, 2), round(json_dict['height'] - y1, 2)]
+            box_dict[3] = [round(x1, 2), round(json_dict['height'] - y1, 2)]
             current_lead_ds["lead_bounding_box"] = box_dict
         
         st = start_index
@@ -632,7 +673,7 @@ def ecg_plot(
             xi, yi = x_vals[j], y_vals[j]
             xi, yi = ax.transData.transform((xi, yi))
             yi = json_dict['height'] - yi
-            current_lead_ds['plotted_pixels'].append([round(yi, 2), round(xi, 2)])
+            current_lead_ds['plotted_pixels'].append([round(xi, 2), round(yi, 2)])
 
         leads_ds.append(current_lead_ds)
 
@@ -665,10 +706,10 @@ def ecg_plot(
                 y1 = int(y1)
                 x2 = int(x2)
                 y2 = int(y2)
-                box_dict[0] = [round(json_dict['height'] - y2, 2), round(x1, 2)]
-                box_dict[1] = [round(json_dict['height'] - y2, 2), round(x2, 2)]
-                box_dict[2] = [round(json_dict['height'] - y1, 2), round(x2, 2)]
-                box_dict[3] = [round(json_dict['height'] - y1), round(x1, 2)]
+                box_dict[0] = [round(x1, 2), round(json_dict['height'] - y2, 2)]
+                box_dict[1] = [round(x2, 2), round(json_dict['height'] - y2, 2)]
+                box_dict[2] = [round(x2, 2), round(json_dict['height'] - y1, 2)]
+                box_dict[3] = [round(x1, 2), round(json_dict['height'] - y1, 2)]
                 current_lead_ds["text_bounding_box"] = box_dict                
             current_lead_ds["lead_name"] = full_mode
 
@@ -712,10 +753,10 @@ def ecg_plot(
             y1 = int(y1)
             x2 = int(x2)
             y2 = int(y2)
-            box_dict[0] = [round(json_dict['height'] - y2, 2), round(x1, 2)]
-            box_dict[1] = [round(json_dict['height'] - y2), round(x2, 2)]
-            box_dict[2] = [round(json_dict['height'] - y1, 2), round(x2, 2)]
-            box_dict[3] = [round(json_dict['height'] - y1, 2), round(x1, 2)]
+            box_dict[0] = [round(x1, 2), round(json_dict['height'] - y2, 2)]
+            box_dict[1] = [round(x2, 2), round(json_dict['height'] - y2, 2)]
+            box_dict[2] = [round(x2, 2), round(json_dict['height'] - y1, 2)]
+            box_dict[3] = [round(x1, 2), round(json_dict['height'] - y1, 2)]
             current_lead_ds["lead_bounding_box"] = box_dict
         current_lead_ds["start_sample"] = start_index
         current_lead_ds["end_sample"] = start_index + len(ecg['full'+full_mode])
@@ -724,7 +765,7 @@ def ecg_plot(
             xi, yi = x_vals[i], y_vals[i]
             xi, yi = ax.transData.transform((xi, yi))
             yi = json_dict['height'] - yi
-            current_lead_ds['plotted_pixels'].append([round(yi, 2), round(xi, 2)])
+            current_lead_ds['plotted_pixels'].append([round(xi, 2), round(yi, 2)])
         leads_ds.append(current_lead_ds)
 
 
@@ -787,6 +828,22 @@ def ecg_plot(
             #The realized per-seam blank width in mm; the requested flag is not
             #recoverable from the image once the per-frame jitter is drawn.
             json_dict['column_gap_mm'] = seam_gaps_mm
+
+    if store_gridpoints:
+        #Top-level keys (not nested under 'leads'), computed in the unpadded render
+        #frame - same convention as plotted_pixels above, so PaperCrumple.crumple and
+        #CameraSensor.sensor's annotation transforms pick them up with a plain key
+        #check. Independent of show_grid: the lattice exists whether or not gridlines
+        #are actually drawn. gridpoints_mask is deliberately NOT set here - it depends
+        #on the FINAL frame after crumple/augment, and is computed once, at the end of
+        #the whole pipeline, in gen_ecg_image_from_data.py.
+        gridpoints, gridpoints_shape, gridpoints_reference_hw = build_gridpoints(
+            ax, x_min, x_max, x_grid_size, y_min, y_max, y_grid_size,
+            json_dict['height'])
+        json_dict['gridpoints'] = gridpoints
+        json_dict['gridpoints_shape'] = gridpoints_shape
+        json_dict['gridpoints_mm_per_step'] = GRIDPOINT_MM_PER_STEP
+        json_dict['gridpoints_reference_hw'] = gridpoints_reference_hw
 
     plt.savefig(os.path.join(output_dir,tail +'.png'),dpi=resolution)
     plt.close(fig)
