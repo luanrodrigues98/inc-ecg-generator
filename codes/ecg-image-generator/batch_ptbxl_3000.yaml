@@ -91,11 +91,14 @@ randomize:
     choice: [1, 2, 4]
 
   # Grid colour, by index into the standard ECG paper palette:
-  # 1 brown, 2 pink, 3 blue, 4 green, 5 red. Weighted towards red and pink, the two
-  # that dominate real paper. This is deliberately NOT random_grid_color, which bypasses
-  # the palette entirely and samples RGB freely - that produces grids no ECG paper has.
+  # 1 brown, 2 pink, 3 blue, 4 green, 5 red, 6 black. Restricted to the red / pink / black
+  # family: 5 and 2 dominate real paper; 6 is the grey rule the bw path uses (major
+  # 0.4/0.4/0.4, minor 0.75/0.75/0.75), which sits clear of the near-black trace. Brown,
+  # blue and green (1, 3, 4) stay in the palette but are no longer drawn here - re-weight
+  # or restore them by editing the choice list. This is deliberately NOT random_grid_color,
+  # which bypasses the palette entirely and samples RGB freely - grids no ECG paper has.
   standard_grid_color:
-    choice: [5, 5, 5, 5, 2, 2, 2, 1, 3, 4]
+    choice: [5, 5, 5, 5, 2, 2, 2, 6, 6]   # ~44% red, ~33% pink, ~22% black
 
   # Print resolution. Set here rather than through random_resolution, which ignores this
   # block and draws from range(50, resolution + 1) - unreadable at the bottom and
@@ -337,8 +340,10 @@ randomize:
   # DAYLIGHT LOCUS, which is one degree of freedom, and the real photographs sit beside that
   # curve rather than on it. Whoever picks up increment 13 should look at the locus, not here.
   #
-  # VERIFIED VISUALLY AT THE LIMITS, as the roteiro demands, on the palette this batch
-  # actually draws (standard_grid_color 40% red, 30% pink, 10% brown, 10% blue, 10% green):
+  # VERIFIED VISUALLY AT THE LIMITS, as the roteiro demands. The batch now draws
+  # standard_grid_color ~44% red, ~33% pink, ~22% black; black is greyscale and inert under
+  # hue rotation, so red is the only drawn entry the rotation can drag. The readings below
+  # (including the +/-15 blue note) are retained - they still describe those palette entries:
   #   red major   -8 deg (255,0,37) red        +8 deg (243,49,0) red-orange
   #   pink major  -8 deg (252,203,226) pink    +8 deg (255,202,215) pink
   # At +/-15 the red one reaches (232,69,0), which reads orange, and the blue one turns

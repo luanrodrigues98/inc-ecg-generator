@@ -40,7 +40,8 @@ standard_major_colors = {'colour1' : (0.4274,0.196,0.1843), #brown
                           'colour2' : (1,0.796,0.866), #pink
                           'colour3' : (0.0,0.0, 0.4), #blue
                           'colour4' : (0,0.3,0.0), #green
-                          'colour5' : (1,0,0) #red
+                          'colour5' : (1,0,0), #red
+                          'colour6' : (0.4,0.4,0.4) #black (grey major rule, as in the bw path; sits clear of the near-black trace)
     }
 
 
@@ -48,7 +49,8 @@ standard_minor_colors = {'colour1' : (0.5882,0.4196,0.3960),
                          'colour2' : (0.996,0.9294,0.9725),
                          'colour3' : (0.0,0, 0.7),
                          'colour4' : (0,0.8,0.3),
-                         'colour5' : (0.996,0.8745,0.8588)
+                         'colour5' : (0.996,0.8745,0.8588),
+                         'colour6' : (0.75,0.75,0.75) #black (light-grey minor rule, as in the bw path)
     }
 
 papersize_values = {'A0' : (33.1,46.8),
@@ -259,6 +261,10 @@ def ecg_plot(
         trace_thickness_jitter=0.15,
         trace_dropout_rate=0.0,
         trace_dropout_length_mm=0.5,
+        lead_name_gap_mm=None,
+        lead_name_gap_jitter_mm=0.0,
+        column_gap_mm=None,
+        column_gap_jitter_mm=0.0,
         seed=-1
         ):
     #Inputs :
@@ -283,6 +289,12 @@ def ecg_plot(
     #                     reproduces the render exactly
     #trace_dropout_length_mm - Mean dropout length in mm of paper, drawn from an
     #                     exponential distribution
+    #column_gap_mm - Blank space opened at each seam between columns of a grid layout, in
+    #                     mm of paper, replacing the upstream lead-separator tick. None
+    #                     keeps the columns flush and the tick drawn, reproducing the
+    #                     upstream render exactly
+    #column_gap_jitter_mm - Half width of an independent uniform draw applied to each
+    #                     seam's gap. Only applied when column_gap_mm is set or this is > 0
 
 
     #Initialize some params
@@ -428,6 +440,67 @@ def ecg_plot(
     tickLength = configs['tickLength']
     tickSize_step = configs['tickSize_step']
 
+    #Vertical gap between a grid lead's name and its trace baseline. Upstream fixes it
+    #at lead_name_offset + 0.2 data units (7 mm on paper). --lead_name_gap_mm overrides
+    #that base distance; --lead_name_gap_jitter_mm perturbs it by a uniform half width
+    #drawn ONCE per frame (its own RNG stream, keyed like the trace-width one, so it
+    #never disturbs the global random draws that pick grid colours), so every grid label
+    #in the frame shifts together. lead_name_gap_data stays None at the defaults and the
+    #legacy expression below is left untouched, reproducing the render byte for byte.
+    lead_name_gap_data = None
+    if lead_name_gap_mm is not None or lead_name_gap_jitter_mm > 0:
+        mm_per_data_unit = standard_values['y_grid_inch'] * 25.4 / y_grid_size
+        gap_mm = lead_name_gap_mm if lead_name_gap_mm is not None else 7.0
+        if lead_name_gap_jitter_mm > 0:
+            gap_rng = np.random.default_rng([abs(seed), abs(start_index), 3])
+            gap_mm += gap_rng.uniform(-lead_name_gap_jitter_mm, lead_name_gap_jitter_mm)
+        #Floor the gap so a large downward jitter cannot ride the label into the baseline.
+        lead_name_gap_data = max(gap_mm, 2.0) / mm_per_data_unit
+
+    #Blank space between columns of a grid layout, replacing the upstream lead-separator
+    #tick. Upstream places the 3x4 columns flush against each other (x_offset steps by
+    #exactly `secs`) and prints a short vertical tick at every seam. --column_gap_mm opens
+    #a real gap at each seam instead and suppresses the tick; --column_gap_jitter_mm makes
+    #each seam's gap an independent uniform draw of half width that many mm, on its own RNG
+    #stream keyed like the trace-width and lead-name-gap streams so it never disturbs the
+    #global draws that pick grid colours. The same seam gaps are reused for every row, so
+    #the blanks line up as clean vertical channels - the four columns come from one
+    #physical printout at fixed x positions, so a per-row offset would be wrong. The gap
+    #shows grid paper without a trace, which is what a real ECG with wider column spacing
+    #looks like.
+    #
+    #The page width is held fixed: the gaps come out of the side margin and the widened
+    #column block is re-centred. Each seam gap is capped so the block still clears a 0.2
+    #data-unit (5 mm) margin on each side; the cap is per seam rather than a proportional
+    #rescale, so one large draw does not shrink the others and decorrelate the seams.
+    #
+    #column_gap_cum stays None at the defaults and the legacy x_offset / x_gap / separator
+    #path is left untouched, reproducing the upstream render byte for byte.
+    column_gap_cum = None
+    seam_gaps_mm = None
+    if column_gap_mm is not None or column_gap_jitter_mm > 0:
+        mm_per_data_unit_x = standard_values['x_grid_inch'] * 25.4 / x_grid_size
+        n_seams = max(columns - 1, 0)
+        base_mm = column_gap_mm if column_gap_mm is not None else 0.0
+        if column_gap_jitter_mm > 0:
+            col_gap_rng = np.random.default_rng([abs(seed), abs(start_index), 4])
+            seam_gaps = np.array([max(base_mm + col_gap_rng.uniform(-column_gap_jitter_mm,
+                                                                    column_gap_jitter_mm), 0.0)
+                                  for _ in range(n_seams)]) / mm_per_data_unit_x
+        else:
+            seam_gaps = np.full(n_seams, max(base_mm, 0.0) / mm_per_data_unit_x)
+        #Cap each seam so the widened, re-centred block still clears a 5 mm side margin.
+        #drawn_content carries the dc_offset because every column's x_vals includes it.
+        margin_reserve = 0.2
+        drawn_content = columns*secs + dc_offset
+        max_total_gap = max(x_max - drawn_content - 2*margin_reserve, 0.0)
+        if n_seams:
+            seam_gaps = np.minimum(seam_gaps, max_total_gap/n_seams)
+        seam_gaps_mm = [round(g*mm_per_data_unit_x, 3) for g in seam_gaps]
+        column_gap_cum = np.concatenate(([0.0], np.cumsum(seam_gaps)))
+        #Re-centre the now wider block. At a total gap of 0 this is the upstream expression.
+        x_gap = np.floor(((x_max - (columns*secs) - column_gap_cum[-1])/2)/0.2)*0.2
+
     for i in np.arange(len(lead_index)):
         current_lead_ds = dict()
 
@@ -447,6 +520,10 @@ def ecg_plot(
         else:
             x_offset = 0
 
+        #Rightward shift of this column from the cumulative blank space of the seams to its
+        #left. 0 for column 0 and for every layout when the gap feature is off.
+        col_off = column_gap_cum[i%columns] if column_gap_cum is not None else 0.0
+
         #Create dc pulse wave to plot at the beginning of plot. Dc pulse will be 0.2 seconds
         x_range = np.arange(0,sample_rate*standard_values['dc_offset_length']*step + 4*step,step)
         dc_pulse = np.ones(len(x_range))
@@ -454,9 +531,11 @@ def ecg_plot(
 
         #Print lead name at .5 ( or 5 mm distance) from plot
         if(show_lead_name):
-            t1 = ax.text(x_offset + x_gap + dc_offset, 
-                    y_offset-lead_name_offset - 0.2, 
-                    leadName, 
+            lead_name_y = (y_offset - lead_name_offset - 0.2) if lead_name_gap_data is None \
+                else (y_offset - lead_name_gap_data)
+            t1 = ax.text(x_offset + x_gap + dc_offset + col_off,
+                    lead_name_y,
+                    leadName,
                     fontsize=lead_fontsize)
             
             if (store_text_bbox):
@@ -512,7 +591,7 @@ def ecg_plot(
                     x1, y1 = bb.x0*resolution/fig.dpi, bb.y0*resolution/fig.dpi
                     x2, y2 = bb.x1*resolution/fig.dpi, bb.y1*resolution/fig.dpi
 
-        x_vals = np.arange(0,len(ecg[leadName])*step,step) + x_offset + dc_offset + x_gap
+        x_vals = np.arange(0,len(ecg[leadName])*step,step) + x_offset + dc_offset + x_gap + col_off
         y_vals = ecg[leadName] + y_offset
 
         trace_bb = draw_trace(ax, x_vals, y_vals, color_line, trace_style, bbox)
@@ -557,7 +636,8 @@ def ecg_plot(
 
         leads_ds.append(current_lead_ds)
 
-        if columns > 1 and (i+1)%columns != 0:
+        #The separator tick is replaced by the blank space when the gap feature is on.
+        if columns > 1 and (i+1)%columns != 0 and column_gap_cum is None:
             sep_x = [len(ecg[leadName])*step + x_offset + dc_offset + x_gap] * round(tickLength*y_grid_dots)
             sep_x = np.array(sep_x)
             sep_y = np.linspace(y_offset - tickLength/2*y_grid_dots*tickSize_step, y_offset + tickSize_step*y_grid_dots*tickLength/2, len(sep_x))
@@ -703,6 +783,10 @@ def ecg_plot(
         json_dict['trace_thickness_jitter'] = trace_jitter
         json_dict['trace_dropout_rate'] = trace_dropout_rate
         json_dict['trace_dropout_length_mm'] = trace_dropout_length_mm
+        if seam_gaps_mm is not None:
+            #The realized per-seam blank width in mm; the requested flag is not
+            #recoverable from the image once the per-frame jitter is drawn.
+            json_dict['column_gap_mm'] = seam_gaps_mm
 
     plt.savefig(os.path.join(output_dir,tail +'.png'),dpi=resolution)
     plt.close(fig)

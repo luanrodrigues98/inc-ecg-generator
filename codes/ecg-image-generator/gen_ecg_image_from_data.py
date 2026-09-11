@@ -95,6 +95,18 @@ def get_parser():
     parser.add_argument("--trace_dropout_rate", type=float, default=0.0)
     parser.add_argument("--trace_dropout_length_mm", type=float, default=0.5)
 
+    # Vertical gap between a grid lead's name (e.g. "V1") and its trace baseline.
+    # Default None reproduces the upstream fixed 7 mm; jitter is a half width in mm,
+    # drawn once per frame and shared by every grid label in that frame.
+    parser.add_argument("--lead_name_gap_mm", type=float, default=None)
+    parser.add_argument("--lead_name_gap_jitter_mm", type=float, default=0.0)
+
+    # Blank space between columns of a grid layout, replacing the upstream black
+    # lead-separator tick. Default None keeps the columns flush and the tick drawn;
+    # --column_gap_jitter_mm makes each seam's gap an independent per-frame draw.
+    parser.add_argument("--column_gap_mm", type=float, default=None)
+    parser.add_argument("--column_gap_jitter_mm", type=float, default=0.0)
+
     parser.add_argument("--crumple_amplitude", type=float, default=0.0)
     parser.add_argument("--crumple_scale_cm", type=float, default=8.0)
     # Shared with the illumination stage below: one light direction per image.
@@ -244,6 +256,10 @@ def run_single_file(args):
         trace_thickness_jitter=args.trace_thickness_jitter,
         trace_dropout_rate=args.trace_dropout_rate,
         trace_dropout_length_mm=args.trace_dropout_length_mm,
+        lead_name_gap_mm=args.lead_name_gap_mm,
+        lead_name_gap_jitter_mm=args.lead_name_gap_jitter_mm,
+        column_gap_mm=args.column_gap_mm,
+        column_gap_jitter_mm=args.column_gap_jitter_mm,
     )
 
     for out in out_array:

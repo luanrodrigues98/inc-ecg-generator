@@ -76,6 +76,14 @@ def get_parser():
     parser.add_argument('--trace_dropout_rate',type=float,default=0.0)
     parser.add_argument('--trace_dropout_length_mm',type=float,default=0.5)
 
+    # Gap between a grid lead's name and its baseline; None reproduces the fixed 7 mm.
+    parser.add_argument('--lead_name_gap_mm',type=float,default=None)
+    parser.add_argument('--lead_name_gap_jitter_mm',type=float,default=0.0)
+
+    # Blank space between grid columns, replacing the upstream black lead-separator tick.
+    parser.add_argument('--column_gap_mm',type=float,default=None)
+    parser.add_argument('--column_gap_jitter_mm',type=float,default=0.0)
+
     parser.add_argument('--crumple_amplitude',type=float,default=0.0)
     parser.add_argument('--crumple_scale_cm',type=float,default=8.0)
     parser.add_argument('--illum_azimuth_deg',type=float,default=-1)
