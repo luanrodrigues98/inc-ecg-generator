@@ -10,6 +10,7 @@ from matplotlib.transforms import Bbox
 from scipy.ndimage import gaussian_filter1d
 from TemplateFiles.generate_template import generate_template
 from helper_functions import lead_layout
+from printed_label import PrintedLabel
 from math import ceil 
 from PIL import Image
 import csv
@@ -459,6 +460,8 @@ def ecg_plot(
         trace_color=None,
         lead_name_position=None,
         lead_name_position_single_column=None,
+        realism=None,
+        realism_flags=None,
         seed=-1
         ):
     #Inputs :
@@ -499,6 +502,9 @@ def ecg_plot(
     #                     upstream does, reproducing the render exactly
     #lead_name_position_single_column - The same weights for a 12x1 page, the only layout
     #                     'level' fits. None falls back to lead_name_position
+    #realism - The parsed realism block (realism.parse_realism) and realism_flags the
+    #                     record's draw of it (realism.draw_realism_flags), both made by
+    #                     extract_leads. None / {} leave every group to its default
 
 
     #Initialize some params
@@ -570,6 +576,30 @@ def ecg_plot(
 
     fig.suptitle(title)
 
+    #Every per-frame stream below is keyed by the frame's own name as well as by (seed,
+    #start_index). The batch hands start_index 0 to the first frame of EVERY record, so
+    #without the name all records drew the same stroke modulation, dropouts, label gap and
+    #column gaps - every 3x4 of a batch had column_gap_mm (2.329, 3.073, 0.585). Same idiom
+    #as PaperCrumple.crumple and CameraSensor.sensor; the tags from 10 up keep these streams
+    #apart from theirs.
+    record_key = zlib.crc32(os.path.basename(rec_file_name).encode('utf-8'))
+
+    #Realism groups (realism.py): extract_leads drew them for the record. A group missing from
+    #realism_flags was not configured and keeps the behaviour the other parameters give it.
+    #The groups that pick a value here do it on streams of their own (tags 20, 21), so they
+    #never shift the global random draws the colour branch below makes.
+    realism_flags = realism_flags or {}
+    if realism_flags.get('inc_paper') and style != 'bw':
+        palettes = realism['inc_paper']['palettes']
+        paper_rng = np.random.default_rng([abs(seed), abs(start_index), record_key, 20])
+        standard_colours = int(palettes[int(paper_rng.integers(len(palettes)))])
+    if realism_flags.get('inc_trace'):
+        colours = realism['inc_trace']['colors']
+        thin_low, thin_high = realism['inc_trace']['thickness_mm']
+        trace_rng = np.random.default_rng([abs(seed), abs(start_index), record_key, 21])
+        trace_color = colours[int(trace_rng.integers(len(colours)))]
+        trace_thickness_mm = float(np.exp(trace_rng.uniform(np.log(thin_low), np.log(thin_high))))
+
     #Mark grid based on whether we want black and white or colour
     paper_color = None
     if (style == 'bw'):
@@ -627,14 +657,6 @@ def ecg_plot(
     #Step size will be number of seconds per sample i.e 1/sampling_rate
     step = (1.0/sample_rate)
 
-    #Every per-frame stream below is keyed by the frame's own name as well as by (seed,
-    #start_index). The batch hands start_index 0 to the first frame of EVERY record, so
-    #without the name all records drew the same stroke modulation, dropouts, label gap and
-    #column gaps - every 3x4 of a batch had column_gap_mm (2.329, 3.073, 0.585). Same idiom
-    #as PaperCrumple.crumple and CameraSensor.sensor; the tags from 10 up keep these streams
-    #apart from theirs.
-    record_key = zlib.crc32(os.path.basename(rec_file_name).encode('utf-8'))
-
     #Resolve the trace stroke width. trace_thickness_mm is a paper length, so converting
     #it here keeps the rendered width invariant to the output resolution. Reassigning
     #line_width also carries the new thickness into the calibration pulse (x1.5) and the
@@ -669,7 +691,8 @@ def ecg_plot(
     leadNames_12 = configs['leadNames_12']
     #Clinical order for the layouts config.yaml covers (3x4, 6x2, 12x1). For the 3x4 it is
     #leadNames_12 itself; a column count the table lacks keeps the flat upstream list.
-    layout = lead_layout(configs, columns, lead_index)
+    layout = lead_layout(configs, columns, lead_index) \
+        if realism_flags.get('clinical_lead_order', True) else None
     tickLength = configs['tickLength']
     tickSize_step = configs['tickSize_step']
 
@@ -744,11 +767,42 @@ def ecg_plot(
     #Per-page lead-name convention (LEAD_NAME_POSITIONS). None keeps every name below its
     #trace as upstream does; nothing in this block runs then, label_slot stays 0.0 (adding
     #it to the traces' x is exact) and the render is reproduced byte for byte.
+    #Group lead_name_position drawn off for this record: the upstream placement, below.
+    if realism_flags.get('lead_name_position') is False:
+        lead_name_position = lead_name_position_single_column = None
     lead_name_position = draw_lead_name_position(seed, start_index, record_key, columns,
                                                  lead_name_position,
                                                  lead_name_position_single_column)
     label_slot = 0.0
     lead_name_collisions = 0
+
+    #Lead names are matplotlib text as upstream or - group lead_name_print - printed like a
+    #thermal printer (printed_label.py), in a style drawn once per page (tag 18) with the
+    #texture of the names drawn from a stream of their own (tag 19).
+    printed_style = None
+    if realism_flags.get('lead_name_print'):
+        print_cfg = realism['lead_name_print']
+        style_rng = np.random.default_rng([abs(seed), abs(start_index), record_key, 18])
+        printed_style = {'font': print_cfg['fonts'][int(style_rng.integers(len(print_cfg['fonts'])))],
+                         'cap_mm': round(float(style_rng.uniform(*print_cfg['cap_mm'])), 3),
+                         'thermal': round(float(style_rng.uniform(*print_cfg['thermal'])), 3)}
+        ink_rng = np.random.default_rng([abs(seed), abs(start_index), record_key, 19])
+        px_per_mm = resolution/25.4
+        data_per_mm_x = x_grid_size/(standard_values['x_grid_inch']*25.4)
+        data_per_mm_y = y_grid_size/(standard_values['y_grid_inch']*25.4)
+
+    def make_label(x, y, text, va=None, probe=False):
+        #One lead name at (x, y), anchored like ax.text: left edge, and the baseline unless
+        #va says otherwise. va None makes exactly the upstream ax.text call. A probe only
+        #measures a width, so it prints clean and spends nothing of the texture stream.
+        if printed_style is None:
+            if va is None:
+                return ax.text(x, y, text, fontsize=lead_fontsize)
+            return ax.text(x, y, text, fontsize=lead_fontsize, va=va)
+        style = dict(printed_style, thermal=0.0) if probe else printed_style
+        return PrintedLabel(ax, text, x, y, style, px_per_mm, data_per_mm_x, data_per_mm_y,
+                            color_line, rng=None if probe else ink_rng, va=va or 'baseline')
+
     if lead_name_position is not None:
         renderer = fig.canvas.get_renderer()
         #One paper millimetre in data units: y runs at 10 mm per unit, x at 25 mm per unit.
@@ -777,7 +831,7 @@ def ecg_plot(
             names = [str(name) for name in lead_index] + ([str(full_mode)] if full_mode != 'None' else [])
             widths = []
             for name in names:
-                probe = ax.text(0, 0, name, fontsize=lead_fontsize)
+                probe = make_label(0, 0, name, probe=True)
                 x0_probe, _, x1_probe, _ = text_extent_data(ax, renderer, probe)
                 probe.remove()
                 widths.append(x1_probe - x0_probe)
@@ -828,22 +882,19 @@ def ecg_plot(
             if lead_name_position is None:
                 lead_name_y = (y_offset - lead_name_offset - 0.2) if lead_name_gap_data is None \
                     else (y_offset - lead_name_gap_data)
-                t1 = ax.text(x_offset + x_gap + dc_offset + col_off,
+                t1 = make_label(x_offset + x_gap + dc_offset + col_off,
                         lead_name_y,
-                        leadName,
-                        fontsize=lead_fontsize)
+                        leadName)
             elif lead_name_position == 'level':
-                t1 = ax.text(x_offset + x_gap + col_off + pulse_end + label_clearance_x,
+                t1 = make_label(x_offset + x_gap + col_off + pulse_end + label_clearance_x,
                         y_offset,
                         leadName,
-                        fontsize=lead_fontsize,
                         va='center')
             else:
                 sign = 1.0 if lead_name_position == 'above' else -1.0
-                t1 = ax.text(x_offset + x_gap + dc_offset + col_off,
+                t1 = make_label(x_offset + x_gap + dc_offset + col_off,
                         y_offset + sign*label_gap,
-                        leadName,
-                        fontsize=lead_fontsize)
+                        leadName)
                 if lead_name_position == 'above':
                     #The row above in the same column is slot i + columns, one row pitch up.
                     upper = slot_ink(i + columns, y_offset + row_height) \
@@ -975,21 +1026,18 @@ def ecg_plot(
             #under that baseline.
             rhythm_baseline = row_height/2-lead_name_offset + 0.8
             if lead_name_position in (None, 'below'):
-                t1 = ax.text(x_gap + dc_offset, 
+                t1 = make_label(x_gap + dc_offset, 
                         row_height/2-lead_name_offset, 
-                        full_mode, 
-                        fontsize=lead_fontsize)
+                        full_mode)
             elif lead_name_position == 'level':
-                t1 = ax.text(x_gap + pulse_end + label_clearance_x,
+                t1 = make_label(x_gap + pulse_end + label_clearance_x,
                         rhythm_baseline,
                         full_mode,
-                        fontsize=lead_fontsize,
                         va='center')
             else:
-                t1 = ax.text(x_gap + dc_offset,
+                t1 = make_label(x_gap + dc_offset,
                         rhythm_baseline + label_gap,
-                        full_mode,
-                        fontsize=lead_fontsize)
+                        full_mode)
                 rhythm_ink = [(np.arange(0,len(ecg['full'+full_mode])*step,step) + x_gap + dc_offset + label_slot,
                                np.asarray(ecg['full'+full_mode], dtype=float) + rhythm_baseline)]
                 if show_dc_pulse:
@@ -1147,6 +1195,13 @@ def ecg_plot(
             json_dict['lead_name_gap_mm'] = 0.0 if lead_name_position == 'level' \
                 else round(label_gap/mm_y, 3)
             json_dict['lead_name_collisions'] = lead_name_collisions
+        if realism_flags:
+            #What the realism block drew for this record, and the values its groups picked.
+            json_dict['realism'] = dict(realism_flags)
+            if realism_flags.get('inc_paper') and style != 'bw':
+                json_dict['grid_palette'] = standard_colours
+            if printed_style is not None:
+                json_dict['lead_name_print'] = printed_style
 
     if store_gridpoints:
         #Top-level keys (not nested under 'leads'), computed in the unpadded render

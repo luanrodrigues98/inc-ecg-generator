@@ -15,7 +15,8 @@
 #     as the Cardiolino does. The old set printed them below, always; with the name
 #     removed or moved above, the model lost 30-45 points of accuracy on 2-4 columns.
 #   - Paper palettes 7-9 carry the INC's grid and paper colours; the trace is thinner
-#     and greyer. See standard_grid_color, trace_color and trace_thickness_mm below.
+#     and greyer; the names are printed like a thermal printer. Each of these, the lead
+#     order and the name position is a realism group with a p of its own - see realism:.
 #   - The per-frame streams in ecg_plot (stroke modulation, dropouts, label gap, column
 #     gaps) are now keyed by record: in the old set every page shared one draw.
 # THIS DATASET IS FOR THE YOLO. Nothing here was checked against the rectifier.
@@ -150,53 +151,17 @@ randomize:
   num_columns:
     choice: [4, 4, 4, 2, 1]
 
-  # Grid colour and paper stock, by index into the palette in ecg_plot:
-  # 1 brown, 2 pink, 3 blue, 4 green, 5 red, 6 black on white paper, and three measured on
-  # the INC's own printouts (Cardio scans at 600 dpi, 2026-09-24), which also fill the paper:
-  #   7 INC pink strip - paper (251,242,246), rules (248,130,160)/(250,160,185). The paper is
-  #     near-white; what reads as pink is a 1 mm grid whose minor rules are as strong as the
-  #     major ones and cover 30-37% of the sheet. The upstream pink (2) has a minor rule of
-  #     (254,237,248), and less than 5% of its page carries any grid colour.
-  #   8 CLB orange - salmon paper (250,206,188) under orange rules (252,156,112).
-  #   9 CLB white  - white paper (244,245,249), salmon rules (246,184,166).
-  # Weighted like the scans (mostly pink strips, then orange and white CLB), keeping a
-  # quarter of the old palettes for variety: ~42% 7, ~17% 8, ~17% 9, ~8% each 5, 2, 6.
-  # White paper - 9, 5, 2 and 6 - is ~42% of the batch. Deliberately NOT random_grid_color,
-  # which bypasses the palette entirely and samples RGB freely.
+  # Grid colour: the old generator's palette mix, 1 brown, 2 pink, 3 blue, 4 green, 5 red,
+  # 6 black, as in batch_ptbxl_3000.calibrated.yaml. The INC palettes 7-9 are drawn by the
+  # realism group inc_paper instead (see realism: below), so their share has a p of its own.
   standard_grid_color:
-    choice: [7, 7, 7, 7, 7, 8, 8, 9, 9, 5, 2, 6]
+    choice: [5, 5, 5, 5, 2, 2, 2, 2, 6]   # ~44% red, ~33% pink, ~22% black
 
-  # Trace colour, drawn per record: eight blues, seven neutral greys and four warm greys.
-  # Re-weight by repeating an entry, as for standard_grid_color above. Without this key the
-  # trace is the grey upstream draws per frame from uniform(0, 0.2). The calibration pulse
-  # and the column separator take the same colour - one stylus draws all three.
-  #
-  # MEASURED ON THE INC PINK STRIPS: the thermal trace is a WARM grey whose core runs from
-  # R 92 to R 180 - medium to light, faint enough to nearly vanish at the YOLO's 1024 px.
-  # The four warm greys (#5d4b3c ... #b4968c) span that range. #d0d0d0, in the previous
-  # list, is gone: it is lighter than the pink grid's own rules.
-  #
-  # QUOTE EVERY HEX STRING. Unquoted, YAML reads the # as the start of a comment: in a
-  # flow list the file fails to parse, and as a plain value the key arrives empty. The
-  # runner refuses both rather than fall back to the grey. An [r, g, b] list with each
-  # channel in 0-1 is accepted too.
-  #
-  # The blues stop at a grey-equivalent luminance of 0.25 (#0d1b4d 0.12, #10307a 0.21,
-  # #1a3a8f 0.25), next to the blacks' 0-0.20. A brighter blue approaches the 0.40 major
-  # rule of grid colour 6, and the two would merge once the image is converted to grey.
-  # saturation and hue_rotation below act on the page afterwards, so at low saturation a
-  # blue trace greys out towards the blacks: expect fewer distinct blues in the images
-  # than this list implies. The colour drawn is recorded per image as ecg_plot_color in
-  # the JSON, in 0-255.
-  #
-  # ADDING THIS KEY RE-ROLLS SEVEN OTHERS. randomize: draws its keys from one per-record
-  # stream in alphabetical order, and trace_color sorts ahead of trace_dropout_length_mm,
-  # trace_dropout_rate, trace_thickness_jitter, trace_thickness_mm, vignette, white_point
-  # and wrinkles, so every record draws different values for those seven than it did
-  # before this key existed. A dataset rendered without it is not reproducible from this
-  # file.
+  # Trace colour: the old generator's list (batch_ptbxl_3000.calibrated.yaml, 16 entries).
+  # The INC's thin warm-grey trace is the realism group inc_trace (see realism: below).
+  # QUOTE EVERY HEX STRING - unquoted, YAML reads the # as a comment.
   trace_color:
-    choice: ['#0a1438', '#0d1b4d', '#132968', '#1a3a8f', '#2451b0', '#3568c8', '#5688dd', '#8bacea', '#000000', '#161616', '#2b2b2b', '#414141', '#5c5c5c', '#7a7a7a', '#a3a3a3', '#5d4b3c', '#6c574a', '#8c7369', '#b4968c']
+    choice: ['#0a1438', '#0d1b4d', '#132968', '#1a3a8f', '#2451b0', '#3568c8', '#5688dd', '#8bacea','#000000', '#161616', '#2b2b2b', '#414141', '#5c5c5c', '#7a7a7a', '#a3a3a3', '#d0d0d0']
 
   # Print resolution. Set here rather than through random_resolution, which ignores this
   # block and draws from range(50, resolution + 1) - unreadable at the bottom and
@@ -223,12 +188,8 @@ randomize:
   # will have a very faint trace. Raise the floor to 0.20 (the documented useful range)
   # if the digitiser needs every trace solidly visible.
   trace_thickness_mm:
-    # INC 2026-09-24: the pink strips' trace measures 0.11-0.19 mm FWHM at 600 dpi (scanner
-    # blur included), the CLB sheets ~0.26 mm. loguniform puts a third of the pages at
-    # 0.08-0.15 mm and the median at 0.19; it spends one draw like uniform did, so the keys
-    # after it are not re-rolled by the change of form. The ink width is NOT set to the
-    # measured FWHM: the scanner's blur and blur_sigma below both widen the line.
-    loguniform: [0.07, 0.5]
+    # The old generator's range; the INC's thin trace is realism group inc_trace.
+    uniform: [0.05, 0.55]     # documented useful range 0.20-0.60
   trace_thickness_jitter:
     # NEEDS SWEEP 2026-09-10: stylus-pressure modulation; no isolated attribute
     uniform: [0.05, 1.0]     # stylus-pressure modulation, as a fraction of thickness
@@ -562,6 +523,63 @@ lead_name_gap_jitter_mm: 2.0   # per-frame, all grid labels; effective range 8-1
 # NOT UNDER randomize: - they are weights, already drawn from per page.
 lead_name_position: 'above:0.6,below:0.4'
 lead_name_position_single_column: 'level:0.5,above:0.25,below:0.25'
+
+# ====================================================================================
+# REALISM GROUPS (realism.py)
+# ====================================================================================
+# Every feature added to make the pages look like the INC's printouts is a group with a
+# probability of its own, drawn once PER RECORD on a stream keyed by (seed, record name)
+# and written to each page's JSON as realism: {group: true/false} - so the effect of each
+# can be measured on small variants (batch_ptbxl_inc_exp_*.yaml extend this file) and a
+# mixed batch can be split by it. With every p at 0 the pages are the old generator's:
+# the upstream lead order, names below, the palettes and trace of the randomize: block.
+# The p values below are a PROPOSAL for the full dataset, not measured yet.
+#
+# A group spends one draw whether or not it is listed, in a fixed order, so adding or
+# removing one never changes another's flag. A group missing here keeps the behaviour the
+# rest of the file gives it.
+realism:
+  # 3x4 / 6x2 / 12x1 in clinical lead order (config.yaml lead_layouts); off prints the
+  # upstream flat order, which no printer uses. The old set had 0 of 460 1-3 column pages
+  # in the clinical order, and the YOLO read the Cardiolino 12x1 in that flat order.
+  clinical_lead_order: 1.0
+
+  # Names placed by lead_name_position / lead_name_position_single_column above; off
+  # prints them below the trace, the upstream way. The Cardio scans print them ~10 mm
+  # ABOVE (pink strip, CLB) or on the baseline between pulse and trace (Cardiolino).
+  lead_name_position: 1.0
+
+  # INC paper: grid rules and paper tint measured on the Cardio scans at 600 dpi.
+  #   7 INC pink strip - near-white paper (251,242,246) under a strong 1 mm grid whose minor
+  #     rules match the major ones and cover 30-37% of the sheet: that grid, not the paper,
+  #     is what reads as pink. The upstream pink (2) has an all but invisible minor rule.
+  #   8 CLB orange - salmon paper (250,206,188) under orange rules.
+  #   9 CLB white  - white paper (244,245,249) under salmon rules.
+  # Weighted like the scans: mostly pink strips, then orange and white CLB. Off keeps the
+  # standard_grid_color draw above.
+  inc_paper:
+    p: 0.75
+    palettes: [7, 7, 7, 7, 7, 8, 8, 9, 9]
+
+  # INC trace: the pink strips' trace measured 0.11-0.19 mm FWHM (scanner blur included)
+  # and a WARM grey, core R 92-180; the CLB sheets ~0.26 mm, neutral or blue. Colour from
+  # the list, width log-uniform over thickness_mm (a third of the pages at 0.08-0.15 mm).
+  # Off keeps trace_color and trace_thickness_mm above.
+  inc_trace:
+    p: 0.75
+    colors: ['#5d4b3c', '#6c574a', '#8c7369', '#b4968c', '#5d4b3c', '#6c574a', '#414141', '#5c5c5c', '#7a7a7a', '#1a3a8f', '#2451b0']
+    thickness_mm: [0.07, 0.5]
+
+  # Names printed like a thermal printer: a sans font (Verdana matches the INC strip, whose
+  # capital I carries bars; Arial the CLB), a capital height of 1.8-2.4 mm (measured on 5
+  # scans, against ~2.8 for the upstream 11 pt), the trace's own ink, and a thermal texture
+  # of strength drawn in thermal - 0 clean, 1 heavy: dots on the head's 0.125 mm pitch,
+  # dots dropping out, ink fading. Off draws the upstream matplotlib text.
+  lead_name_print:
+    p: 0.9
+    fonts: ['Verdana.ttf', 'Verdana.ttf', 'Arial.ttf']
+    cap_mm: [1.8, 2.4]
+    thermal: [0.0, 1.0]
 
 # --- Annotations ---------------------------------------------------------------------
 # 2 records the distortion parameters actually applied per image (noise, crop, rotation,

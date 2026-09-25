@@ -47,6 +47,7 @@ from helper_functions import find_records
 from gen_ecg_images_from_data_batch import get_parser
 from gen_ecg_image_from_data import run_single_file
 from ecg_plot import parse_lead_name_position_weights, standard_major_colors
+from realism import parse_realism
 from CameraPhotometry.photometry import LEVELS_MIN_SPAN, HUE_ROTATION_MAX
 from CameraSensor.sensor import SUPERSAMPLE_MAX, SENSOR_NOISE_MAX
 
@@ -681,6 +682,23 @@ def build_args(config, config_path):
                 "2 pink, 3 blue, 4 green, 5 red, 6 black, 7 INC pink strip, 8 CLB orange, "
                 "9 CLB white (7-9 also tint the paper)." % (config_path, colour))
 
+    #The realism block (realism.py) is a nested mapping of group -> p or {p: ..., params}.
+    #Parsed here so a typo fails on the config; it is already a per-record draw, so it
+    #cannot go under randomize: as well. inc_paper names palettes, checked like the grid
+    #colour above.
+    if 'realism' in randomize:
+        raise SystemExit("%s: realism cannot go under randomize:. Its groups are already drawn "
+                         "per record, each with its own p." % config_path)
+    try:
+        realism = parse_realism(args.realism)
+    except ValueError as error:
+        raise SystemExit("%s: %s" % (config_path, error))
+    if realism and 'inc_paper' in realism:
+        for colour in realism['inc_paper']['palettes']:
+            if 'colour%d' % colour not in standard_major_colors:
+                raise SystemExit("%s: realism: inc_paper.palettes has %r, not a palette index "
+                                 "(1-9)." % (config_path, colour))
+
     #skip_existing is read as a switch, so anything but the two states is a typo rather
     #than a setting. YAML true/false arrive as bools and pass here unchanged.
     if args.skip_existing not in (0, 1, True, False):
@@ -765,15 +783,48 @@ def render_record(args, randomize, record, input_directory, output_root):
     return run_single_file(args)
 
 
+#Keys whose value is a mapping merged key by key under extends:, rather than replaced whole.
+MERGED_KEYS = ('randomize', 'realism')
+
+
+def load_config(config_path, chain=()):
+    """Read a batch YAML, resolving `extends: <other.yaml>`.
+
+    A variant names a base file (relative to its own directory) and lists only what it
+    changes. Keys replace the base's, except randomize: and realism:, which merge entry by
+    entry; an entry set to null there removes the base's. Bases may extend further bases.
+    """
+    with open(config_path) as handle:
+        config = yaml.safe_load(handle)
+    if not isinstance(config, dict):
+        raise SystemExit("%s: expected a YAML mapping of parameters" % config_path)
+    base_name = config.pop('extends', None)
+    if base_name is None:
+        return config
+    base_path = os.path.normpath(os.path.join(os.path.dirname(config_path), base_name))
+    if base_path in chain + (config_path,):
+        raise SystemExit("%s: extends forms a cycle through %s" % (config_path, base_path))
+    merged = load_config(base_path, chain + (config_path,))
+    for key, value in config.items():
+        if key in MERGED_KEYS and isinstance(value, dict) and isinstance(merged.get(key), dict):
+            combined = dict(merged[key])
+            for entry, entry_value in value.items():
+                if entry_value is None:
+                    combined.pop(entry, None)
+                else:
+                    combined[entry] = entry_value
+            merged[key] = combined
+        else:
+            merged[key] = value
+    return merged
+
+
 def main():
     if len(sys.argv) != 2:
         raise SystemExit("usage: run_batch_from_config.py <config.yaml>")
 
     config_path = os.path.normpath(os.path.join(INVOCATION_CWD, sys.argv[1]))
-    with open(config_path) as handle:
-        config = yaml.safe_load(handle)
-    if not isinstance(config, dict):
-        raise SystemExit("%s: expected a YAML mapping of parameters" % config_path)
+    config = load_config(config_path)
 
     args, randomize = build_args(config, config_path)
 

@@ -1,0 +1,13 @@
+# Realism experiment, variant "order": baseline + clinical lead order on every page.
+# One of batch_ptbxl_inc_exp_*.yaml: 1500 pages each, the same 1500 records (the runner
+# takes the first 1500 by name), same seed, dpi and chain, so they differ only in realism.
+# Run: .venv310/bin/python run_batch_from_config.py batch_ptbxl_inc_exp_order.yaml
+extends: batch_ptbxl_inc_v2.yaml
+output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_inc_exp/order
+max_num_images: 1500
+realism:
+  clinical_lead_order: {p: 1.0}
+  lead_name_position: {p: 0.0}
+  inc_paper: {p: 0.0}
+  inc_trace: {p: 0.0}
+  lead_name_print: {p: 0.0}

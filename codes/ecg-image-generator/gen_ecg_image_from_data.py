@@ -114,6 +114,12 @@ def get_parser():
     parser.add_argument("--lead_name_position", type=str, default=None)
     parser.add_argument("--lead_name_position_single_column", type=str, default=None)
 
+    # Realism groups, each switched on per record with a probability of its own and recorded
+    # in the JSON (realism.py): clinical_lead_order, lead_name_position, inc_paper, inc_trace,
+    # lead_name_print. A JSON mapping, e.g. '{"inc_paper": 0.5, "lead_name_print": {"p": 1}}'.
+    # Default None leaves every feature to the other flags.
+    parser.add_argument("--realism", type=str, default=None)
+
     # Blank space between columns of a grid layout, replacing the upstream black
     # lead-separator tick. Default None keeps the columns flush and the tick drawn;
     # --column_gap_jitter_mm makes each seam's gap an independent per-frame draw.
@@ -286,6 +292,7 @@ def run_single_file(args):
         lead_name_gap_jitter_mm=args.lead_name_gap_jitter_mm,
         lead_name_position=args.lead_name_position,
         lead_name_position_single_column=args.lead_name_position_single_column,
+        realism=args.realism,
         column_gap_mm=args.column_gap_mm,
         column_gap_jitter_mm=args.column_gap_jitter_mm,
         store_gridpoints=args.store_gridpoints,

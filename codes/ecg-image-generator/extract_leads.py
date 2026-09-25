@@ -14,9 +14,11 @@ import wfdb
 from PIL import Image, ImageDraw, ImageFont
 from random import randint
 import random
+import zlib
+from realism import parse_realism, draw_realism_flags
 
 # Run script.
-def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,add_bw,show_grid, add_print, configs, mask_unplotted_samples = False, start_index = -1, store_configs=False, store_text_bbox=True,key='val',resolution=100,units='inches',papersize='',add_lead_names=True,pad_inches=1,template_file=os.path.join('TemplateFiles','TextFile1.txt'),font_type=os.path.join('Fonts','Times_New_Roman.ttf'),standard_colours=5,full_mode='II',bbox = False,columns=-1,trace_thickness_mm=None,trace_thickness_jitter=0.15,trace_dropout_rate=0.0,trace_dropout_length_mm=0.5,lead_name_gap_mm=None,lead_name_gap_jitter_mm=0.0,column_gap_mm=None,column_gap_jitter_mm=0.0,store_gridpoints=False,trace_color=None,lead_name_position=None,lead_name_position_single_column=None):
+def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,add_bw,show_grid, add_print, configs, mask_unplotted_samples = False, start_index = -1, store_configs=False, store_text_bbox=True,key='val',resolution=100,units='inches',papersize='',add_lead_names=True,pad_inches=1,template_file=os.path.join('TemplateFiles','TextFile1.txt'),font_type=os.path.join('Fonts','Times_New_Roman.ttf'),standard_colours=5,full_mode='II',bbox = False,columns=-1,trace_thickness_mm=None,trace_thickness_jitter=0.15,trace_dropout_rate=0.0,trace_dropout_length_mm=0.5,lead_name_gap_mm=None,lead_name_gap_jitter_mm=0.0,column_gap_mm=None,column_gap_jitter_mm=0.0,store_gridpoints=False,trace_color=None,lead_name_position=None,lead_name_position_single_column=None,realism=None):
 
     # Extract a reduced-lead set from each pair of full-lead header and recording files.
     full_header_file = header_file
@@ -85,7 +87,14 @@ def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,ad
     #printed layout shows the k-th window. The clinical layout table decides it for the
     #column counts it covers (3x4, 6x2, 12x1); anything else keeps the upstream rule, where
     #only the 3x4 shifts its windows.
-    layout = lead_layout(configs, columns, full_leads)
+    #The realism groups are drawn once per record, here, because clinical_lead_order also
+    #decides the windows cut below, which every frame of the record shares. Keyed by the
+    #record name, on a stream of their own (realism.py).
+    realism = parse_realism(realism)
+    realism_flags = draw_realism_flags(
+        seed, zlib.crc32(os.path.basename(os.path.splitext(full_header_file)[0]).encode('utf-8')), realism)
+    layout = lead_layout(configs, columns, full_leads) \
+        if realism_flags.get('clinical_lead_order', True) else None
     def window_of(key):
         if layout is not None:
             return layout[1].get(key, 0)
@@ -273,7 +282,7 @@ def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,ad
         if ecg_frame[i] == {}:
             continue
 
-        x_grid,y_grid = ecg_plot(ecg_frame[i], configs=configs, full_header_file=full_header_file, style=grid_colour, sample_rate = rate,columns=columns,rec_file_name = rec_file, output_dir = output_directory, resolution = resolution, pad_inches = pad_inches, lead_index=full_leads, full_mode = full_mode, store_text_bbox = store_text_bbox, show_lead_name=add_lead_names,show_dc_pulse=dc,papersize=papersize,show_grid=(grid),standard_colours=standard_colours,bbox=bbox, print_txt=print_txt, json_dict=json_dict, start_index=start, store_configs=store_configs, lead_length_in_seconds=lead_length_in_seconds, trace_thickness_mm=trace_thickness_mm, trace_thickness_jitter=trace_thickness_jitter, trace_dropout_rate=trace_dropout_rate, trace_dropout_length_mm=trace_dropout_length_mm, lead_name_gap_mm=lead_name_gap_mm, lead_name_gap_jitter_mm=lead_name_gap_jitter_mm, column_gap_mm=column_gap_mm, column_gap_jitter_mm=column_gap_jitter_mm, store_gridpoints=store_gridpoints, trace_color=trace_color, lead_name_position=lead_name_position, lead_name_position_single_column=lead_name_position_single_column, seed=seed)
+        x_grid,y_grid = ecg_plot(ecg_frame[i], configs=configs, full_header_file=full_header_file, style=grid_colour, sample_rate = rate,columns=columns,rec_file_name = rec_file, output_dir = output_directory, resolution = resolution, pad_inches = pad_inches, lead_index=full_leads, full_mode = full_mode, store_text_bbox = store_text_bbox, show_lead_name=add_lead_names,show_dc_pulse=dc,papersize=papersize,show_grid=(grid),standard_colours=standard_colours,bbox=bbox, print_txt=print_txt, json_dict=json_dict, start_index=start, store_configs=store_configs, lead_length_in_seconds=lead_length_in_seconds, trace_thickness_mm=trace_thickness_mm, trace_thickness_jitter=trace_thickness_jitter, trace_dropout_rate=trace_dropout_rate, trace_dropout_length_mm=trace_dropout_length_mm, lead_name_gap_mm=lead_name_gap_mm, lead_name_gap_jitter_mm=lead_name_gap_jitter_mm, column_gap_mm=column_gap_mm, column_gap_jitter_mm=column_gap_jitter_mm, store_gridpoints=store_gridpoints, trace_color=trace_color, lead_name_position=lead_name_position, lead_name_position_single_column=lead_name_position_single_column, realism=realism, realism_flags=realism_flags, seed=seed)
 
         rec_head, rec_tail = os.path.split(rec_file)
         

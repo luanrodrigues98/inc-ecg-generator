@@ -90,6 +90,10 @@ def get_parser():
     parser.add_argument('--lead_name_position',type=str,default=None)
     parser.add_argument('--lead_name_position_single_column',type=str,default=None)
 
+    # Realism groups with a per-record probability each (realism.py), as a JSON mapping;
+    # the YAML runner takes a nested mapping under realism:. None leaves them all off.
+    parser.add_argument('--realism',type=str,default=None)
+
     # Blank space between grid columns, replacing the upstream black lead-separator tick.
     parser.add_argument('--column_gap_mm',type=float,default=None)
     parser.add_argument('--column_gap_jitter_mm',type=float,default=0.0)
