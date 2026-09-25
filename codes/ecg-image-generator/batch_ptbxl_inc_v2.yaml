@@ -19,6 +19,10 @@
 #     order and the name position is a realism group with a p of its own - see realism:.
 #   - The per-frame streams in ecg_plot (stroke modulation, dropouts, label gap, column
 #     gaps) are now keyed by record: in the old set every page shared one draw.
+#   - Half the pages are flatbed scans rather than phone photos (realism group scan_look,
+#     measured on 39 Cardio scans), and 70% carry pen notes - name, date, time, signature,
+#     remark - 5-15 mm tall, off the printed names, ~12% of them across a trace (group
+#     handwriting; boxes in the JSON as handwriting: [...], NOT lead classes).
 # THIS DATASET IS FOR THE YOLO. Nothing here was checked against the rectifier.
 #
 # Stage D of the roteiro is CLOSED and stage E is OPEN: as of increment 13 the page is
@@ -85,8 +89,12 @@ output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbx
 # 3000 at 350-600 dpi. MEASURED on the 25-page smoke run (2026-09-24,
 # ptbxl_synthetic_inc_v2_fumaca): PNG MB = 1.764e-4*dpi^2 + 6.2, i.e. 46.9 MB on average
 # over this dpi range (the old set: 41.8 - the INC grids compress worse), plus 1.0 MB of
-# JSON/npy/WFDB sidecars: ~144 GB for the batch. Time 40.6 s per page at max_workers 1:
-# ~34 h.
+# JSON/npy/WFDB sidecars: ~140 GB for the batch as drawn. Time 40.6 s per page at
+# max_workers 1 on that smoke run, all photo pages (~34 h). Since then (2026-09-25) half
+# the pages are scans, which skip the crumple and run ~2x faster (s = 1.66e-4*dpi^2 for a
+# photo page, 7.9e-5*dpi^2 for a scan, measured on 6 pages), and the pen notes add 1-3 s
+# to the 70% of pages that carry them: ~30 s per page, ~25 h, ESTIMATED from those 6 pages.
+# The fumaca directory predates both groups.
 max_num_images: 3000
 
 seed: 42
