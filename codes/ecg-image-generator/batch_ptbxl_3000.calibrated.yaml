@@ -20,9 +20,10 @@
 # ~100 MB at the top of the range and is rewritten by each of crumple, blur, illumination
 # and photometry.
 #
-# THE 12.4 GB IS THE NUMBER TO WATCH. The runner is serial, so that is the peak for the
-# whole process, but it is over half the memory available on this machine (22 GB free of
-# 30): do not run a second batch, or anything else large, alongside it. supersample 2 halves the wall clock
+# THE 12.4 GB IS THE NUMBER TO WATCH. At max_workers 1 that is the peak for the whole
+# process, but it is over half the memory available on this machine (22 GB free of
+# 30): do not run a second batch, or anything else large, alongside it. With more workers
+# the peak multiplies - see max_workers below for the measured figures. supersample 2 halves the wall clock
 # and the peak, and out/supersample_eval/RESULTADOS.md measures it as no worse than 3.
 #
 # Keys are the argparse DESTINATION names of gen_ecg_images_from_data_batch.py, not the
@@ -58,10 +59,27 @@ output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbx
 # removes records100/union, 1998 byte-identical copies of 01000-02999 that os.walk
 # happens to reach third - without the check they would enter the set a second time and,
 # in a flat output directory, overwrite the originals.
-max_num_images: 4000
+max_num_images: 6000
 
 seed: 42
 config_file: config.yaml   # plotting constants (paper_len, layout, ticks)
+
+# How many records render at once, each in a joblib worker process of its own; 1 keeps the
+# run in the runner's process. It does NOT change the images: every RNG in the chain is
+# reseeded per record from (seed, record name), so 1, 4 and 8 workers were verified to write
+# byte-identical PNG and JSON, and a resumed batch matches an uninterrupted one.
+#
+# RAM, NOT THE CORE COUNT, IS THE CEILING. Measured 2026-09-14 on this machine (16 cores,
+# 30 GB, ~26 GB free) at supersample 2 over this resolution range:
+#     1 worker    8.7-9.1 s/img    peak  5.7 GB
+#     4 workers   3.7 s/img        peak 11.6 GB    worst case 21.0 GB, 5.4 GB left
+#     6 workers   3.4 s/img        peak 15.9 GB    worst case would pass 34 GB
+#     8 workers   no faster than 4
+# The worst case is every worker on a 300 dpi record at the same time: each one peaks at
+# ~5.7 GB there. The speed-up is ~2.4x rather than 4x partly because a single process
+# already keeps ~1.8 cores busy. Raise supersample and the per-worker peak grows with its
+# square, so lower this with it.
+max_workers: 1
 # num_leads is deliberately absent: it is declared in both parsers and never read, like
 # temperature, deterministic_rot, deterministic_temp and deterministic_crop. The lead
 # count comes from the WFDB header. Setting it here would look meaningful and do nothing.
@@ -88,7 +106,7 @@ randomize:
   # paper_len / columns, so the layout also changes how much signal each trace shows.
   # To bias the mix towards the most common clinical layout, repeat it: [4, 4, 4, 2, 1].
   num_columns:
-    choice: [1, 2, 4]
+    choice: [1, 2, 3, 4]
 
   # Grid colour, by index into the standard ECG paper palette:
   # 1 brown, 2 pink, 3 blue, 4 green, 5 red, 6 black. Restricted to the red / pink / black
@@ -99,6 +117,34 @@ randomize:
   # which bypasses the palette entirely and samples RGB freely - grids no ECG paper has.
   standard_grid_color:
     choice: [5, 5, 5, 5, 2, 2, 2, 2, 6]   # ~44% red, ~33% pink, ~22% black
+
+  # Trace colour, drawn per record: three shades of black and three of blue, half and
+  # half. Re-weight by repeating an entry, as for standard_grid_color above. Without
+  # this key the trace is the grey upstream draws per frame from uniform(0, 0.2); the
+  # three blacks span that same range. The calibration pulse and the column separator
+  # take the same colour - one stylus draws all three.
+  #
+  # QUOTE EVERY HEX STRING. Unquoted, YAML reads the # as the start of a comment: in a
+  # flow list the file fails to parse, and as a plain value the key arrives empty. The
+  # runner refuses both rather than fall back to the grey. An [r, g, b] list with each
+  # channel in 0-1 is accepted too.
+  #
+  # The blues stop at a grey-equivalent luminance of 0.25 (#0d1b4d 0.12, #10307a 0.21,
+  # #1a3a8f 0.25), next to the blacks' 0-0.20. A brighter blue approaches the 0.40 major
+  # rule of grid colour 6, and the two would merge once the image is converted to grey.
+  # saturation and hue_rotation below act on the page afterwards, so at low saturation a
+  # blue trace greys out towards the blacks: expect fewer distinct blues in the images
+  # than this list implies. The colour drawn is recorded per image as ecg_plot_color in
+  # the JSON, in 0-255.
+  #
+  # ADDING THIS KEY RE-ROLLS SEVEN OTHERS. randomize: draws its keys from one per-record
+  # stream in alphabetical order, and trace_color sorts ahead of trace_dropout_length_mm,
+  # trace_dropout_rate, trace_thickness_jitter, trace_thickness_mm, vignette, white_point
+  # and wrinkles, so every record draws different values for those seven than it did
+  # before this key existed. A dataset rendered without it is not reproducible from this
+  # file.
+  trace_color:
+    choice: ['#0a1438', '#0d1b4d', '#132968', '#1a3a8f', '#2451b0', '#3568c8', '#5688dd', '#8bacea','#000000', '#161616', '#2b2b2b', '#414141', '#5c5c5c', '#7a7a7a', '#a3a3a3', '#d0d0d0']
 
   # Print resolution. Set here rather than through random_resolution, which ignores this
   # block and draws from range(50, resolution + 1) - unreadable at the bottom and
@@ -115,7 +161,7 @@ randomize:
     # CALIBRATED 2026-09-10 [direct]: direct from px_per_mm_est on 104 real images; dpi P5-P95 116-371 (median 301); previous [150, 300]
     # WARNING: dpi is of the paper as photographed; equals print dpi only if the sheet fills the frame
     # WARNING: projected batch cost at this dpi: 4.7 h and 55 GB for 4000 images (was 4.0 h / 46 GB)
-    randint: [116, 300]
+    randint: [350, 600]
 
   # Trace geometry, in paper millimetres and therefore invariant to the resolution above.
   # NOTE on the 0.05 floor: thickness in pixels is thickness_mm * dpi / 25.4, so 0.05 mm
@@ -456,6 +502,16 @@ lead_name_gap_jitter_mm: 2.0   # per-frame, all grid labels; effective range 8-1
 store_config: 2
 lead_bbox: true            # NB: a true here forces crop to 0 inside the augment stage
 lead_name_bbox: true
+
+# Ground-truth grid-point lattice (the 5 mm grid intersections), pushed through the same
+# crumple / supersample / augment transform chain as plotted_pixels and written both into
+# the JSON (gridpoints, gridpoints_shape, gridpoints_mm_per_step, gridpoints_reference_hw,
+# gridpoints_mask) and as a <name>.gridpoint_xy.npy + <name>.gridpoint_mask.npy sidecar
+# pair, in the [x,y] convention documented in coordinate_order. Built for training a
+# paper-rectification model the way hengck23's Kaggle notebook does it. Requires
+# store_config 1 or 2 - the single-file driver refuses the flag otherwise - which this
+# batch already sets above.
+store_gridpoints: true
 
 # --- Stage B, substrate: the sheet ---------------------------------------------------
 # crumple_amplitude is a MAXIMUM, drawn per image by the driver from uniform(0, value)

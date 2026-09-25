@@ -7,21 +7,30 @@
 #script is the missing consumer: it fills that namespace from a YAML file so a run is
 #described by one reviewable, version-controllable document instead of a long command.
 #
-#It adds two things the batch driver cannot express:
+#It adds three things the batch driver cannot express:
 #
 #  - a `randomize:` block, which draws a parameter PER RECORD instead of fixing it for
 #    the whole batch. The driver samples crumple, blur, noise and rotation per image
 #    already, but layout, trace geometry and resolution are single values for the run,
 #    which makes 3000 images that differ only in their distortion. num_columns in
 #    particular has no random mode at all.
-#  - seeding of every RNG in the chain. run() seeds `random` only; numpy and imgaug are
-#    left on their global state, so --augment and any fractional bernoulli probability
-#    make a batch that cannot be reproduced from its seed.
+#  - seeding of every RNG in the chain, PER RECORD. run() seeds `random` only; numpy and
+#    imgaug are left on their global state, so --augment and any fractional bernoulli
+#    probability make a batch that cannot be reproduced from its seed. Seeding all three
+#    once at the top of the batch was not enough either: the draws inside run_single_file
+#    then depended on how many draws every earlier record had consumed, and a resumed batch
+#    was measured rendering different images from an uninterrupted one. Each record now
+#    restarts all three from (seed, record name).
+#  - max_workers, which renders several records at once in joblib worker processes. It
+#    rests on the per-record seeding above: without it the images would depend on which
+#    worker happened to take which record.
 #
 #Usage:
 #    .venv310/bin/python run_batch_from_config.py batch_ptbxl_3000.yaml
-import os, sys, glob, json, random, shutil, tempfile, yaml
+import os, sys, copy, glob, json, random, shutil, tempfile, zlib, contextlib, yaml
+import joblib
 import numpy as np
+from joblib import Parallel, delayed
 from tqdm import tqdm
 
 #The config path is an argument to THIS script, so it is resolved against the shell's
@@ -33,6 +42,7 @@ os.chdir(GENERATOR_ROOT)
 
 import imgaug
 from PIL import Image
+from matplotlib.colors import is_color_like
 from helper_functions import find_records
 from gen_ecg_images_from_data_batch import get_parser
 from gen_ecg_image_from_data import run_single_file
@@ -41,6 +51,30 @@ from CameraSensor.sensor import SUPERSAMPLE_MAX, SENSOR_NOISE_MAX
 
 REQUIRED_KEYS = ('input_directory', 'output_directory')
 DRAWS = ('choice', 'uniform', 'randint')
+
+
+@contextlib.contextmanager
+def tqdm_joblib(*args, **kwargs):
+    """Context manager to patch joblib to report into tqdm progress bar
+    given as argument"""
+
+    tqdm_object = tqdm(*args, **kwargs)
+
+    class TqdmBatchCompletionCallback(joblib.parallel.BatchCompletionCallBack):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+
+        def __call__(self, *args, **kwargs):
+            tqdm_object.update(n=self.batch_size)
+            return super().__call__(*args, **kwargs)
+
+    old_batch_callback = joblib.parallel.BatchCompletionCallBack
+    joblib.parallel.BatchCompletionCallBack = TqdmBatchCompletionCallback
+    try:
+        yield tqdm_object
+    finally:
+        joblib.parallel.BatchCompletionCallBack = old_batch_callback
+        tqdm_object.close()
 
 
 #Keys the end-of-chain block writes into the annotation at store_config 2. Their presence
@@ -568,6 +602,36 @@ def build_args(config, config_path):
             "trace_* key, vignette, white_point and wrinkles for the whole batch."
             % (config_path, args.sensor_noise_jitter_log2))
 
+    #trace_color reaches matplotlib only when a frame renders, so a typo in one entry of a
+    #choice list would surface on whichever record happened to draw it, possibly hours into
+    #the batch. Every candidate is parsed here instead. Only choice is accepted: colours
+    #have no order, so a uniform or randint between two of them means nothing.
+    #
+    #NOTE WHAT IS *NOT* REFUSED HERE. No deterministic_trace_color is needed, for the same
+    #reason as the saturation: run_single_file draws nothing inside this key, so a randomize:
+    #entry is the only draw and nothing compounds.
+    if 'trace_color' in randomize and next(iter(randomize['trace_color'])) != 'choice':
+        raise SystemExit(
+            "%s: randomize: trace_color must be a choice list, e.g. {choice: ['#000000', "
+            "'#10307a']}. Colours have no order, so uniform and randint mean nothing here."
+            % config_path)
+    #A key present with an empty value is checked too, not skipped as the default: an
+    #unquoted hex string arrives exactly that way, because YAML reads its # as a comment,
+    #and letting it through would quietly render the grey the key was set to replace.
+    if 'trace_color' in randomize:
+        trace_colors = randomize['trace_color']['choice']
+    elif 'trace_color' in config:
+        trace_colors = [args.trace_color]
+    else:
+        trace_colors = []
+    for colour in trace_colors:
+        if not is_color_like(colour):
+            raise SystemExit(
+                "%s: trace_color %r is not a colour matplotlib can parse. Use a QUOTED hex "
+                "string such as '#10307a' - unquoted, YAML reads the # as a comment and the "
+                "value arrives empty - a colour name, or an [r, g, b] list with each channel "
+                "in 0-1, not 0-255." % (config_path, colour))
+
     #skip_existing is read as a switch, so anything but the two states is a typo rather
     #than a setting. YAML true/false arrive as bools and pass here unchanged.
     if args.skip_existing not in (0, 1, True, False):
@@ -585,6 +649,17 @@ def build_args(config, config_path):
             "from a finished one and would be kept. Use store_config 2, or set "
             "skip_existing: false and clear the output directory yourself." % config_path)
 
+    #max_workers is a count of processes, so anything but a whole number from 1 up is a typo.
+    #YAML true arrives as a bool, which Python also accepts as the int 1, so it is refused by
+    #type rather than let through as a single worker nobody asked for by that name.
+    if (isinstance(args.max_workers, bool) or not isinstance(args.max_workers, int)
+            or args.max_workers < 1):
+        raise SystemExit(
+            "%s: max_workers is %r and must be a whole number of at least 1. It is how many "
+            "records render at once, each in a worker process of its own, and every worker "
+            "holds a whole render in memory - about 5.7 GB at 300 dpi and supersample 2."
+            % (config_path, args.max_workers))
+
     return args, randomize
 
 
@@ -597,8 +672,48 @@ def seed_everything(seed):
     """
     entropy = abs(int(seed)) % (2 ** 32)
     random.seed(seed)
-    np.random.seed(entropy)
+    #imgaug BEFORE numpy, and the order is load bearing. The first imgaug.seed of a process
+    #builds imgaug's global RNG lazily, seeding it with one draw from numpy's global RNG
+    #(imgaug/random.py, get_global_rng), before overwriting its state with the entropy.
+    #Called after np.random.seed, that draw shifted numpy's stream by one - but only for the
+    #first record each process renders, which flipped a calibration_pulse draw between
+    #max_workers 1 and 4. Called first, the draw lands on a stream about to be reseeded.
     imgaug.seed(entropy)
+    np.random.seed(entropy)
+
+
+def render_record(args, randomize, record, input_directory, output_root):
+    """Render one record and return the number of frames written.
+
+    The unit of work handed to the joblib workers, and what max_workers 1 runs in the
+    runner's own process. Everything a record's images depend on is derived here from
+    (seed, record name) alone, so they do not depend on which worker takes the record, in
+    what order, or which records before it were skipped as already finished.
+    """
+    header_file, recording_file, name = record
+    #A copy, so the keys set per record cannot leak into the next record a worker takes.
+    args = copy.copy(args)
+    args.input_file = os.path.join(input_directory, recording_file)
+    args.header_file = os.path.join(input_directory, header_file)
+    args.start_index = -1
+    args.output_directory = output_root
+    args.encoding = name
+
+    #Key the per-record draws by record name rather than by position in the walk,
+    #so a record keeps its characteristics wherever the listing reaches it.
+    rng = random.Random('%s:%s' % (args.seed, args.encoding))
+    for key, spec in sorted(randomize.items()):
+        setattr(args, key, draw(spec, rng))
+
+    #Restart every global RNG run_single_file draws from - the font, the crumple, blur and
+    #illumination amplitudes, the white balance, the augment noise, rotation and crop, the
+    #bernoulli switches and imgaug's own noise. Seeded ONCE per batch, those draws depended
+    #on how many draws the records before had consumed, so a resume changed the images after
+    #it and no two worker schedules would agree. The ':chain' suffix keeps this stream apart
+    #from the randomize stream above, which is keyed by the same pair.
+    seed_everything(zlib.crc32(('%s:%s:chain' % (args.seed, name)).encode('utf-8')))
+
+    return run_single_file(args)
 
 
 def main():
@@ -620,7 +735,7 @@ def main():
     os.makedirs(output_root, exist_ok=True)
     args.input_directory = input_directory
 
-    seed_everything(args.seed)
+    #No batch-wide seeding here: render_record reseeds every RNG per record.
 
     print("config           : %s" % config_path)
     print("input_directory  : %s" % input_directory)
@@ -628,6 +743,7 @@ def main():
     print("max_num_images   : %s" % args.max_num_images)
     print("seed             : %s" % args.seed)
     print("skip_existing    : %s" % bool(args.skip_existing))
+    print("max_workers      : %s" % args.max_workers)
     print("randomized       : %s" % (', '.join(sorted(randomize)) or 'none'))
     sys.stdout.flush()
 
@@ -662,14 +778,15 @@ def main():
     print("records          : %d unique (%d duplicate name(s) skipped)" % (len(records), duplicates))
     sys.stdout.flush()
 
-    #Count the bar in images rather than records: run_single_file returns the number of
-    #frames it wrote, and max_num_images caps frames, not records. On this corpus the two
-    #coincide at one frame per record, but a longer recording would split into several.
+    #max_num_images caps FRAMES, not records: run_single_file returns the number of frames it
+    #wrote. On this corpus the two coincide at one frame per record, but a longer recording
+    #would split into several.
     skip_existing = bool(args.skip_existing)
+    cap = args.max_num_images
 
     total = len(records)
-    if args.max_num_images != -1:
-        total = min(args.max_num_images, total)
+    if cap != -1:
+        total = min(cap, total)
 
     written = 0
     #Frames found already finished in the output directory. Counted SEPARATELY from written
@@ -678,45 +795,45 @@ def main():
     #batch that already holds 1500 renders the remaining 2500 rather than another 4000.
     present = 0
     skipped = 0
-    bar = tqdm(total=total, unit='img', desc='rendering', dynamic_ncols=True)
-    try:
-        for header_file, recording_file, name in records:
-            #Skip what is already finished. Cheap to check and it happens before anything
-            #else, so a resume over a nearly complete directory costs a stat per record.
-            #SAFE ONLY BECAUSE THE PER-RECORD DRAWS ARE KEYED BY NAME: the randomize block
-            #is drawn from random.Random(seed:name) a few lines below, so a record keeps its
-            #parameters wherever the walk reaches it and skipping its neighbours cannot
-            #change them. See the note in the finished-frames helper for what it can prove.
-            if skip_existing and record_is_finished(output_root, name, args.store_config):
-                present += len(frames_on_disk(output_root, name))
-                skipped += 1
-                bar.update(min(written + present, total) - bar.n)
-                if args.max_num_images != -1 and written + present >= args.max_num_images:
-                    break
-                continue
-
-            args.input_file = os.path.join(input_directory, recording_file)
-            args.header_file = os.path.join(input_directory, header_file)
-            args.start_index = -1
-            args.output_directory = output_root
-            args.encoding = name
-
-            #Key the per-record draws by record name rather than by position in the walk,
-            #so a record keeps its characteristics wherever the listing reaches it.
-            rng = random.Random('%s:%s' % (args.seed, args.encoding))
-            for key, spec in sorted(randomize.items()):
-                setattr(args, key, draw(spec, rng))
-
-            bar.set_postfix_str(name, refresh=False)
-            written += run_single_file(args)
-            #Clamp, so a record yielding more frames than the cap leaves cannot push the
-            #bar past its total.
-            bar.update(min(written + present, total) - bar.n)
-
-            if args.max_num_images != -1 and written + present >= args.max_num_images:
+    cursor = 0
+    #The bar counts RECORDS, rendered or skipped: the joblib callback tqdm_joblib patches fires
+    #once per task, and a task is a record. On this corpus that is also the image count.
+    with tqdm_joblib(total=total, unit='record', desc='rendering', dynamic_ncols=True) as bar, \
+            Parallel(n_jobs=args.max_workers, batch_size=1) as parallel:
+        #Dispatched in WAVES, each as many records as the cap still has room for. The serial
+        #loop could stop the moment the cap was met; a worker cannot be stopped mid-render, and
+        #a record's frame count is only known once it has rendered. So a wave assumes one frame
+        #per record, and the loop goes round again only if some record came back with none.
+        #Without a cap there is a single wave.
+        while cursor < len(records):
+            wave = []
+            while cursor < len(records) and (cap == -1 or written + present + len(wave) < cap):
+                record = records[cursor]
+                cursor += 1
+                #Skip what is already finished. Cheap to check, and done here before anything
+                #is dispatched, so a resume over a nearly complete directory costs a stat per
+                #record. SAFE BECAUSE A RECORD'S IMAGES DEPEND ON ITS NAME ALONE - see
+                #render_record - so skipping its neighbours cannot change them. See the note in
+                #the finished-frames helper for what the check itself can prove.
+                if skip_existing and record_is_finished(output_root, record[2], args.store_config):
+                    present += len(frames_on_disk(output_root, record[2]))
+                    skipped += 1
+                    bar.update(1)
+                    continue
+                wave.append(record)
+            if not wave:
                 break
-    finally:
-        bar.close()
+
+            if args.max_workers == 1:
+                #joblib sends n_jobs=1 down a sequential path that never builds the completion
+                #callback tqdm_joblib patches, so the bar is advanced here instead.
+                for record in wave:
+                    written += render_record(args, randomize, record, input_directory, output_root)
+                    bar.update(1)
+            else:
+                written += sum(parallel(
+                    delayed(render_record)(args, randomize, record, input_directory, output_root)
+                    for record in wave))
 
     if skipped:
         #Named rather than silent. A resume that skips everything looks exactly like a run

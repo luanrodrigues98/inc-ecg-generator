@@ -76,6 +76,9 @@ def get_parser():
     parser.add_argument('--trace_thickness_jitter',type=float,default=0.15)
     parser.add_argument('--trace_dropout_rate',type=float,default=0.0)
     parser.add_argument('--trace_dropout_length_mm',type=float,default=0.5)
+    # Trace colour as a matplotlib colour spec ('#10307a', 'navy'); None keeps the
+    # near-black grey the grid style picks.
+    parser.add_argument('--trace_color',type=str,default=None)
 
     # Gap between a grid lead's name and its baseline; None reproduces the fixed 7 mm.
     parser.add_argument('--lead_name_gap_mm',type=float,default=None)
@@ -127,6 +130,10 @@ def get_parser():
     #off, and the store_false alternative would invert the name the way remove_lead_names
     #does, which the batch YAML has a warning about.
     parser.add_argument('--skip_existing',type=int,default=1)
+
+    #Also read only by run_batch_from_config: how many records render at once, each in a
+    #worker process of its own. 1 keeps the whole run in the runner's own process.
+    parser.add_argument('--max_workers',type=int,default=1)
 
     parser.add_argument('--fully_random',action='store_true',default=False)
     parser.add_argument('--hw_text',action='store_true',default=False)

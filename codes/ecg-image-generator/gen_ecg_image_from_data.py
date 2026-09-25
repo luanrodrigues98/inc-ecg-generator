@@ -95,6 +95,10 @@ def get_parser():
     parser.add_argument("--trace_thickness_jitter", type=float, default=0.15)
     parser.add_argument("--trace_dropout_rate", type=float, default=0.0)
     parser.add_argument("--trace_dropout_length_mm", type=float, default=0.5)
+    # Colour of the trace, the calibration pulse and the lead-separator tick, as a
+    # matplotlib colour spec ('#10307a', 'navy'). Default None keeps the near-black grey
+    # the grid style picks, reproducing the upstream render.
+    parser.add_argument("--trace_color", type=str, default=None)
 
     # Vertical gap between a grid lead's name (e.g. "V1") and its trace baseline.
     # Default None reproduces the upstream fixed 7 mm; jitter is a half width in mm,
@@ -269,6 +273,7 @@ def run_single_file(args):
         trace_thickness_jitter=args.trace_thickness_jitter,
         trace_dropout_rate=args.trace_dropout_rate,
         trace_dropout_length_mm=args.trace_dropout_length_mm,
+        trace_color=args.trace_color,
         lead_name_gap_mm=args.lead_name_gap_mm,
         lead_name_gap_jitter_mm=args.lead_name_gap_jitter_mm,
         column_gap_mm=args.column_gap_mm,

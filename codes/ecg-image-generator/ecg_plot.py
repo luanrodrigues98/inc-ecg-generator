@@ -237,7 +237,14 @@ def build_gridpoints(ax, x_min, x_max, x_grid_size, y_min, y_max, y_grid_size, h
     #the page, whether or not show_grid draws it. No RNG use - ax.transData is already
     #fixed by set_xlim/set_ylim, called well before this.
     xs = np.arange(x_min, x_max, x_grid_size)
-    ys = np.arange(y_min, y_max, y_grid_size)
+    #Descending, not the ascending order np.arange gives: data y grows UPWARD on the
+    #page, so an ascending ys puts the paper's bottom edge in row 0. Reversed here so
+    #row 0 is the TOP of the page once the height-y flip below turns data y into
+    #pixel y - normal image reading order, and what a row-major consumer like
+    #hengck23's rectify_image (F.interpolate straight from row index to output row)
+    #assumes without saying so. Verified empirically: row 0 landed near pixel y ==
+    #height (the bottom) before this fix, flipping the rectified page vertically.
+    ys = np.arange(y_min, y_max, y_grid_size)[::-1]
     n_cols = len(xs)
     n_rows = len(ys)
 
@@ -306,6 +313,7 @@ def ecg_plot(
         column_gap_mm=None,
         column_gap_jitter_mm=0.0,
         store_gridpoints=False,
+        trace_color=None,
         seed=-1
         ):
     #Inputs :
@@ -336,6 +344,10 @@ def ecg_plot(
     #                     upstream render exactly
     #column_gap_jitter_mm - Half width of an independent uniform draw applied to each
     #                     seam's gap. Only applied when column_gap_mm is set or this is > 0
+    #trace_color - Colour of the trace, the calibration pulse and the lead-separator tick,
+    #                     as any matplotlib colour spec ('#10307a', 'navy', (0,0,0.5)).
+    #                     None keeps the colour the style picks, reproducing the render
+    #                     exactly
 
 
     #Initialize some params
@@ -434,6 +446,16 @@ def ecg_plot(
         color_minor = (minor_random_color_sampler_red,minor_random_color_sampler_green,minor_random_color_sampler_blue)
         
         color_line  = (grey_random_color,grey_random_color,grey_random_color)
+
+    #trace_color, when set, replaces the trace colour picked above in every branch, bw
+    #included - an explicit colour wins over the style. Applied AFTER the branches rather
+    #than instead of their grey draw, and that is load bearing: random.uniform(0,0.2) comes
+    #off the global random stream the rest of the chain draws from, so skipping it would
+    #shift every later draw and the frame would change in more than its trace colour.
+    #The calibration pulse and the lead-separator tick read color_line too, and follow it
+    #on purpose: the same stylus draws all three.
+    if trace_color is not None:
+        color_line = matplotlib.colors.to_rgb(trace_color)
 
     #Set grid
     #Standard ecg has grid size of 0.5 mV and 0.2 seconds. Set ticks accordingly
