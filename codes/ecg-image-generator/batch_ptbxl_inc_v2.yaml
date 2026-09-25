@@ -11,7 +11,7 @@
 #     lead_layouts). The old set printed 1-, 2- and 3-column pages in an order no
 #     printer uses, and the model learned it. 3 columns is gone: it has no clinical form.
 #   - Lead names are printed ABOVE the trace on 60% of the grid pages, as the INC pink
-#     strip and the CLB sheets do, and between pulse and trace on half the 12x1 pages,
+#     strip and the CLB sheets do, and between pulse and trace on 60% of the 12x1 pages,
 #     as the Cardiolino does. The old set printed them below, always; with the name
 #     removed or moved above, the model lost 30-45 points of accuracy on 2-4 columns.
 #   - Paper palettes 7-9 carry the INC's grid and paper colours; the trace is thinner
@@ -521,8 +521,13 @@ lead_name_gap_jitter_mm: 2.0   # per-frame, all grid labels; effective range 8-1
 # The lead box never grows to take the name in: it covers the trace (and the pulse on
 # the left column, which nb 4.3 trims off).
 # NOT UNDER randomize: - they are weights, already drawn from per page.
+#
+# 12x1 carries little 'above' (0.1, was 0.25 in the first smoke run): its rows are only
+# 14.4 mm apart, so a name above had to settle for touching ink on 12 of 13 labels and
+# still overlapped a trace on up to 7 of them. 'below' has no avoidance at all (the
+# upstream placement) and touched ink on 1-4 labels a page.
 lead_name_position: 'above:0.6,below:0.4'
-lead_name_position_single_column: 'level:0.5,above:0.25,below:0.25'
+lead_name_position_single_column: 'level:0.6,above:0.1,below:0.3'
 
 # ====================================================================================
 # REALISM GROUPS (realism.py)
@@ -563,12 +568,14 @@ realism:
 
   # INC trace: the pink strips' trace measured 0.11-0.19 mm FWHM (scanner blur included)
   # and a WARM grey, core R 92-180; the CLB sheets ~0.26 mm, neutral or blue. Colour from
-  # the list, width log-uniform over thickness_mm (a third of the pages at 0.08-0.15 mm).
+  # the list, width log-uniform over thickness_mm: median 0.14 mm, half the pages under
+  # 0.15 (thinned on 2026-09-25 from [0.07, 0.5], whose 0.22 mm median FWHM measured at the
+  # ground-truth trace came out thicker than the pink strips' 0.13-0.19).
   # Off keeps trace_color and trace_thickness_mm above.
   inc_trace:
     p: 0.75
     colors: ['#5d4b3c', '#6c574a', '#8c7369', '#b4968c', '#5d4b3c', '#6c574a', '#414141', '#5c5c5c', '#7a7a7a', '#1a3a8f', '#2451b0']
-    thickness_mm: [0.07, 0.5]
+    thickness_mm: [0.05, 0.4]
 
   # Names printed like a thermal printer: a sans font (Verdana matches the INC strip, whose
   # capital I carries bars; Arial the CLB), a capital height of 1.8-2.4 mm (measured on 5

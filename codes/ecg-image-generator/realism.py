@@ -48,7 +48,7 @@ DEFAULTS = {
     'inc_paper': {'palettes': [7, 7, 7, 7, 7, 8, 8, 9, 9]},
     'inc_trace': {'colors': ['#5d4b3c', '#6c574a', '#8c7369', '#b4968c', '#5d4b3c', '#6c574a',
                              '#414141', '#5c5c5c', '#7a7a7a', '#1a3a8f', '#2451b0'],
-                  'thickness_mm': [0.07, 0.5]},
+                  'thickness_mm': [0.05, 0.4]},
     'lead_name_print': {'fonts': ['Verdana.ttf', 'Verdana.ttf', 'Arial.ttf'],
                         'cap_mm': [1.8, 2.4],
                         'thermal': [0.0, 1.0]},

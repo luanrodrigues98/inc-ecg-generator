@@ -24,6 +24,9 @@
 #  - max_workers, which renders several records at once in joblib worker processes. It
 #    rests on the per-record seeding above: without it the images would depend on which
 #    worker happened to take which record.
+#  - extends: <base.yaml>, so a variant of a batch lists only what it changes: keys replace
+#    the base's, randomize: and realism: merge entry by entry, and an entry set to null
+#    removes the base's. batch_ptbxl_inc_exp_*.yaml are variants of batch_ptbxl_inc_v2.yaml.
 #
 #Usage:
 #    .venv310/bin/python run_batch_from_config.py batch_ptbxl_3000.yaml
