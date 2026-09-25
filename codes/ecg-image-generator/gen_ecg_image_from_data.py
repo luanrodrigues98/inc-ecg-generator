@@ -17,6 +17,7 @@ from CameraPhotometry.photometry import get_exposed, daylight_gains, mired_to_cc
 from CameraSensor.sensor import get_resampled, get_sensor_noise, sensor_noise_level
 import warnings
 from helper_functions import read_config_file
+from realism import parse_realism, draw_realism_flags, record_key as realism_record_key, scan_look_args
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 warnings.filterwarnings("ignore")
@@ -208,6 +209,16 @@ def run_single_file(args):
     if hasattr(args, "st") == True:
         random.seed(args.seed)
         args.encoding = args.input_file
+
+    # Realism group scan_look (realism.py): this record is a flatbed scan, not a phone
+    # photo, so the photographic chain below runs with a scanner's settings. The flag is
+    # the one extract_leads draws for the record - same function, same key - so the JSON's
+    # realism entry and the chain always agree.
+    realism_cfg = parse_realism(args.realism)
+    if realism_cfg and "scan_look" in realism_cfg:
+        scan_key = realism_record_key(args.header_file)
+        if draw_realism_flags(args.seed, scan_key, realism_cfg).get("scan_look"):
+            args = scan_look_args(args, realism_cfg["scan_look"], args.seed, scan_key)
 
     filename = args.input_file
     header = args.header_file

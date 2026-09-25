@@ -11,3 +11,4 @@ realism:
   inc_paper: {p: 0.0}
   inc_trace: {p: 1.0}
   lead_name_print: {p: 0.0}
+  scan_look: {p: 0.0}

@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw, ImageFont
 from random import randint
 import random
 import zlib
-from realism import parse_realism, draw_realism_flags
+from realism import parse_realism, draw_realism_flags, record_key as realism_record_key
 
 # Run script.
 def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,add_bw,show_grid, add_print, configs, mask_unplotted_samples = False, start_index = -1, store_configs=False, store_text_bbox=True,key='val',resolution=100,units='inches',papersize='',add_lead_names=True,pad_inches=1,template_file=os.path.join('TemplateFiles','TextFile1.txt'),font_type=os.path.join('Fonts','Times_New_Roman.ttf'),standard_colours=5,full_mode='II',bbox = False,columns=-1,trace_thickness_mm=None,trace_thickness_jitter=0.15,trace_dropout_rate=0.0,trace_dropout_length_mm=0.5,lead_name_gap_mm=None,lead_name_gap_jitter_mm=0.0,column_gap_mm=None,column_gap_jitter_mm=0.0,store_gridpoints=False,trace_color=None,lead_name_position=None,lead_name_position_single_column=None,realism=None):
@@ -91,8 +91,7 @@ def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,ad
     #decides the windows cut below, which every frame of the record shares. Keyed by the
     #record name, on a stream of their own (realism.py).
     realism = parse_realism(realism)
-    realism_flags = draw_realism_flags(
-        seed, zlib.crc32(os.path.basename(os.path.splitext(full_header_file)[0]).encode('utf-8')), realism)
+    realism_flags = draw_realism_flags(seed, realism_record_key(full_header_file), realism)
     layout = lead_layout(configs, columns, full_leads) \
         if realism_flags.get('clinical_lead_order', True) else None
     def window_of(key):

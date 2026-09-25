@@ -21,6 +21,13 @@
 #                        texture of strength drawn in `thermal` (0 clean, 1 heavy: dots on the
 #                        head's 0.125 mm pitch, dots dropping out, fading). Off draws the
 #                        upstream matplotlib text.
+#  scan_look           - the page is a flatbed scan, not a phone photo: flat on the glass
+#                        (no crumple, no wrinkles, no side light, no vignette), neutral white
+#                        balance, a bright page, a skew of at most `rotate` degrees, little
+#                        blur and ~2 levels of noise - all measured on 39 Cardio scans at
+#                        600 dpi (paper luminance median 245, p10 236; high-frequency noise
+#                        on the paper ~2 levels; skew median 0.2 deg, max 1.6). Off keeps the
+#                        photographic chain the rest of the configuration sets.
 #
 #A group absent from the block is not drawn and keeps the behaviour the rest of the
 #configuration gives it; the JSON then carries no entry for it.
@@ -30,15 +37,20 @@
 #lead, and that cut is shared by all frames of a record. Every group spends one draw,
 #configured or not, in the fixed order of GROUPS, so adding or removing a group never
 #changes another group's flag.
+import copy
 import json
 import os
+import zlib
 
 import numpy as np
 from matplotlib.colors import is_color_like
 
 FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Fonts')
 
-GROUPS = ('clinical_lead_order', 'lead_name_position', 'inc_paper', 'inc_trace', 'lead_name_print')
+#Order is load bearing: every group spends one draw in this order, so a new group goes at
+#the END, or every existing flag of a batch changes.
+GROUPS = ('clinical_lead_order', 'lead_name_position', 'inc_paper', 'inc_trace', 'lead_name_print',
+          'scan_look')
 
 #Parameters a group takes besides p, with their defaults - measured on the Cardio scans
 #(2026-09-24) where a number is involved.
@@ -52,6 +64,14 @@ DEFAULTS = {
     'lead_name_print': {'fonts': ['Verdana.ttf', 'Verdana.ttf', 'Arial.ttf'],
                         'cap_mm': [1.8, 2.4],
                         'thermal': [0.0, 1.0]},
+    #exposure: a linear gain; 0.85-0.97 puts white paper at 237-251 (scanned median 245).
+    #white_point stays near 1: a scanner does not blow the paper out, and 0.97 was enough to
+    #push it to 255 in the first smoke run; contrast likewise stays near 1. rotate: whole degrees, as get_augment draws them. noise: the
+    #maximum of get_augment's per-image draw over range(1, noise + 1), in levels.
+    #blur_sigma: the maximum, in px of the delivered image, of the per-image draw.
+    'scan_look': {'rotate': 1, 'blur_sigma': 0.6, 'exposure': [0.85, 0.97],
+                  'contrast': [0.97, 1.05], 'white_point': [0.99, 1.0],
+                  'saturation': [0.9, 1.2], 'noise': 2},
 }
 
 
@@ -112,6 +132,18 @@ def parse_realism(spec):
                                  % (FONTS_DIR, fonts))
             out['cap_mm'] = _range(group, 'cap_mm', out['cap_mm'], 0.5, 10.0)
             out['thermal'] = _range(group, 'thermal', out['thermal'], 0.0, 1.0)
+        if group == 'scan_look':
+            for key, low, high in (('exposure', 0.05, 4.0), ('contrast', 0.05, 4.0),
+                                   ('white_point', 0.5, 1.0), ('saturation', 0.0, 2.0)):
+                out[key] = _range(group, key, out[key], low, high)
+            for key, low, high in (('rotate', 0, 45), ('noise', 1, 255)):
+                if isinstance(out[key], bool) or not isinstance(out[key], int) or not low <= out[key] <= high:
+                    raise ValueError("realism: scan_look.%s must be a whole number in [%d, %d], got %r"
+                                     % (key, low, high, out[key]))
+            if isinstance(out['blur_sigma'], bool) or not isinstance(out['blur_sigma'], (int, float)) \
+                    or not 0 <= out['blur_sigma'] <= 10:
+                raise ValueError("realism: scan_look.blur_sigma must be in [0, 10] px, got %r"
+                                 % (out['blur_sigma'],))
         parsed[group] = out
     return parsed or None
 
@@ -124,3 +156,47 @@ def draw_realism_flags(seed, record_key, realism):
     draws = rng.random(len(GROUPS))
     return {group: bool(draws[k] < realism[group]['p'])
             for k, group in enumerate(GROUPS) if group in realism}
+
+
+def record_key(header_file):
+    """The key the realism draw of a record is made on: its name, without directory or
+    extension. extract_leads and run_single_file both derive it, and must agree."""
+    return zlib.crc32(os.path.basename(os.path.splitext(header_file)[0]).encode('utf-8'))
+
+
+def scan_look_args(args, scan, seed, key):
+    """A copy of the chain's arguments turned into a flatbed scan's (group scan_look).
+
+    Every photographic stage is switched off or narrowed to what a scanner does; the few
+    values drawn per record come from a stream of their own (tag 22), and the per-image
+    draws that remain (blur, rotation, noise) keep going through the chain's own code with
+    the maxima set here. Values the record drew under randomize: are replaced, not mixed.
+    """
+    a = copy.copy(args)
+    rng = np.random.default_rng([abs(int(seed)), int(key), 22])
+    a.crumple_amplitude = 0.0
+    a.wrinkles = False
+    a.illum_strength = 0.0
+    a.vignette = 0.0
+    a.blur_sigma = float(scan['blur_sigma'])
+    a.deterministic_blur = False
+    a.exposure = float(rng.uniform(*scan['exposure']))
+    a.exposure_jitter_stops = 0.0
+    a.wb_r = a.wb_b = 1.0
+    a.wb_mired_jitter = 0.0
+    a.contrast = float(rng.uniform(*scan['contrast']))
+    a.contrast_jitter_log2 = 0.0
+    a.black_point = 0.0
+    a.deterministic_black_point = True
+    a.white_point = float(rng.uniform(*scan['white_point']))
+    a.deterministic_white_point = True
+    a.saturation = float(rng.uniform(*scan['saturation']))
+    a.saturation_jitter_log2 = 0.0
+    a.hue_rotation = 0.0
+    a.hue_rotation_jitter_deg = 0.0
+    a.rotate = int(scan['rotate'])
+    a.noise = int(scan['noise'])
+    a.deterministic_noise = False
+    a.sensor_noise = 0.0
+    a.sensor_noise_jitter_log2 = 0.0
+    return a

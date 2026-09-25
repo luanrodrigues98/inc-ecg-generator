@@ -588,6 +588,24 @@ realism:
     cap_mm: [1.8, 2.4]
     thermal: [0.0, 1.0]
 
+  # The page is a flatbed SCAN rather than a phone photo: flat on the glass (no crumple, no
+  # wrinkles, no side light, no vignette), neutral white balance, a bright page, a skew of
+  # at most 1 degree, little blur and ~2 levels of noise. Measured on 39 Cardio scans at
+  # 600 dpi: paper luminance median 245 (p10 236); high-frequency noise on the paper ~2
+  # levels, where the photographic chain adds up to 25; skew median 0.2 deg, max 1.6. At
+  # the YOLO's 1024 px the photographic chain's grain was the most visible difference from
+  # the Cardio scans. The Cardio test pages are scans; part of dataset_label are photos -
+  # hence half and half. Off keeps the photographic chain above.
+  scan_look:
+    p: 0.5
+    rotate: 1
+    blur_sigma: 0.6
+    exposure: [0.85, 0.97]      # white paper at 237-251; the scans' paper sits at 236-249
+    contrast: [0.97, 1.05]
+    white_point: [0.99, 1.0]    # 0.97 blew the paper out to 255 in the first smoke run
+    saturation: [0.9, 1.2]
+    noise: 2
+
 # --- Annotations ---------------------------------------------------------------------
 # 2 records the distortion parameters actually applied per image (noise, crop, rotation,
 # temperature, grid colours, crumple amplitude, blur sigma, columns) on top of the
