@@ -606,6 +606,30 @@ realism:
     saturation: [0.9, 1.2]
     noise: 2
 
+  # Pen notes on the page (handwritten_notes.py): the patient's name, a date ("27/11/19"),
+  # a time ("9:40hs"), a signature, a short remark ("FC 72", "s/ alt"), as the ward writes
+  # them on the INC's printouts - distractors for the lead detector, next to and across the
+  # traces. Written with the upstream handwriting model (8 writer styles; ASCII only, so
+  # names are transliterated), 1-2 hands per page, before the crumple so the ink deforms
+  # with the paper; each note's box goes in the JSON as handwriting: [...]. The ink keeps
+  # off the printed lead names; only over_trace crosses a trace, so at most ~15% of the
+  # notes do. p 0.7 is the user's estimate of how many INC pages carry notes: TO BE
+  # MEASURED on the Cardio scans and dataset_label, like the sizes and inks below.
+  handwriting:
+    p: 0.7
+    n_notes: [1, 4]
+    writers: [1, 2]
+    kinds: {date: 0.25, time: 0.15, name: 0.25, signature: 0.15, note: 0.2}
+    regions: {header: 0.4, margin: 0.2, between_rows: 0.25, over_trace: 0.15}
+    ink: ['#1b2a7c', '#22349a', '#2a3a8c', '#1e2f6e', '#1c1c22', '#2a2a30']   # blue pens 2:1
+    opacity: [0.75, 0.95]
+    height_mm: [3.0, 6.0]      # digit height of the hand; signatures 1.2-1.6x larger
+    stroke_mm: [0.25, 0.5]     # a ballpoint's line
+    tilt_deg: 6.0
+    bias: [0.6, 1.5]           # the model's neatness; signatures are written at 0.05-0.3
+    styles: [0, 1, 2, 3, 4, 5, 6, 7]
+    avoid_names: true
+
 # --- Annotations ---------------------------------------------------------------------
 # 2 records the distortion parameters actually applied per image (noise, crop, rotation,
 # temperature, grid colours, crumple amplitude, blur sigma, columns) on top of the

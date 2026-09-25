@@ -18,6 +18,7 @@ from CameraSensor.sensor import get_resampled, get_sensor_noise, sensor_noise_le
 import warnings
 from helper_functions import read_config_file
 from realism import parse_realism, draw_realism_flags, record_key as realism_record_key, scan_look_args
+from handwritten_notes import add_handwriting
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 warnings.filterwarnings("ignore")
@@ -117,8 +118,9 @@ def get_parser():
 
     # Realism groups, each switched on per record with a probability of its own and recorded
     # in the JSON (realism.py): clinical_lead_order, lead_name_position, inc_paper, inc_trace,
-    # lead_name_print. A JSON mapping, e.g. '{"inc_paper": 0.5, "lead_name_print": {"p": 1}}'.
-    # Default None leaves every feature to the other flags.
+    # lead_name_print, scan_look, handwriting. A JSON mapping, e.g.
+    # '{"inc_paper": 0.5, "lead_name_print": {"p": 1}}'. Default None leaves every feature to
+    # the other flags.
     parser.add_argument("--realism", type=str, default=None)
 
     # Blank space between columns of a grid layout, replacing the upstream black
@@ -215,10 +217,27 @@ def run_single_file(args):
     # the one extract_leads draws for the record - same function, same key - so the JSON's
     # realism entry and the chain always agree.
     realism_cfg = parse_realism(args.realism)
-    if realism_cfg and "scan_look" in realism_cfg:
-        scan_key = realism_record_key(args.header_file)
-        if draw_realism_flags(args.seed, scan_key, realism_cfg).get("scan_look"):
-            args = scan_look_args(args, realism_cfg["scan_look"], args.seed, scan_key)
+    realism_key = realism_record_key(args.header_file)
+    realism_flags = draw_realism_flags(args.seed, realism_key, realism_cfg)
+    if realism_flags.get("scan_look"):
+        args = scan_look_args(args, realism_cfg["scan_look"], args.seed, realism_key)
+
+    # Realism group handwriting (handwritten_notes.py) places its notes by the geometry the
+    # render annotates - traces, printed names - so it needs the JSON, and the names' boxes
+    # when it is to keep off them. Refused up front, like store_gridpoints above, rather than
+    # left to fail on the first record that draws the flag.
+    handwriting_cfg = (realism_cfg or {}).get("handwriting")
+    if handwriting_cfg and handwriting_cfg["p"] > 0:
+        if not args.store_config:
+            raise SystemExit(
+                "realism: handwriting requires --store_config (1 or 2): the notes are placed "
+                "by the traces and lead names the per-frame JSON records, and their boxes are "
+                "written into it.")
+        if handwriting_cfg["avoid_names"] and args.remove_lead_names and not args.lead_name_bbox:
+            raise SystemExit(
+                "realism: handwriting.avoid_names needs --lead_name_bbox: without the boxes of "
+                "the printed lead names there is nothing to keep the ink off. Add the flag, or "
+                "set avoid_names to false.")
 
     filename = args.input_file
     header = args.header_file
@@ -363,6 +382,22 @@ def run_single_file(args):
             json_dict["num_words"] = num_words
             json_dict["x_offset_for_handwritten_text"] = x_offset
             json_dict["y_offset_for_handwritten_text"] = y_offset
+
+        # Realism group handwriting: pen notes - a name, a date, a time, a signature, a short
+        # remark - written on the printed page. Here, before the creases and the crumple, so
+        # the ink deforms and shades with the paper, and at the render resolution, like the
+        # page. Its boxes are in the frame of the other annotations and every later stage
+        # that moves those moves them too. The draws are the page's own streams, so the rest
+        # of the chain is the same with the notes as without them.
+        if realism_flags.get("handwriting"):
+            json_dict["handwriting"] = add_handwriting(
+                out,
+                handwriting_cfg,
+                json_dict,
+                resolution=render_resolution,
+                seed=args.seed,
+                start_index=args.start_index,
+            )
 
         if wrinkles:
             ifWrinkles = True

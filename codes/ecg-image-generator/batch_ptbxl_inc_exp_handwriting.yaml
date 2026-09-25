@@ -1,9 +1,9 @@
-# Realism experiment, variant "scan": baseline + a flatbed scan's chain instead of the phone photo's, on every page.
+# Realism experiment, variant "handwriting": baseline + pen notes (name, date, time, signature, remark) on every page.
 # One of batch_ptbxl_inc_exp_*.yaml: 1500 pages each, the same 1500 records (the runner
 # takes the first 1500 by name), same seed, dpi and chain, so they differ only in realism.
-# Run: .venv310/bin/python run_batch_from_config.py batch_ptbxl_inc_exp_scan.yaml
+# Run: .venv310/bin/python run_batch_from_config.py batch_ptbxl_inc_exp_handwriting.yaml
 extends: batch_ptbxl_inc_v2.yaml
-output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_inc_exp/scan
+output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_inc_exp/handwriting
 max_num_images: 1500
 realism:
   clinical_lead_order: {p: 0.0}
@@ -11,5 +11,5 @@ realism:
   inc_paper: {p: 0.0}
   inc_trace: {p: 0.0}
   lead_name_print: {p: 0.0}
-  scan_look: {p: 1.0}
-  handwriting: {p: 0.0}
+  scan_look: {p: 0.0}
+  handwriting: {p: 1.0}

@@ -12,3 +12,4 @@ realism:
   inc_trace: {p: 0.0}
   lead_name_print: {p: 1.0}
   scan_look: {p: 0.0}
+  handwriting: {p: 0.0}

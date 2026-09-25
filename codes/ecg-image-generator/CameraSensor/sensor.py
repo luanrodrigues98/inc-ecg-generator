@@ -149,6 +149,11 @@ def scale_annotations(json_dict,scale_x,scale_y):
         json_dict['gridpoints_reference_hw'] = [round(float(reference_hw[0])*scale_y,2),
                                                 round(float(reference_hw[1])*scale_x,2)]
 
+    #Pen notes (realism group handwriting): the four [x,y] corners of each note's box.
+    for note in json_dict.get('handwriting',[]):
+        note['box'] = [[round(float(x)*scale_x,2),round(float(y)*scale_y,2)]
+                       for x,y in note['box']]
+
     #The page level figures that are counted in pixels or in pixels per unit of paper.
     #Missing any of these leaves the annotation describing the render while the PNG beside
     #it is the output: the boxes and the trace coordinates would still agree with each

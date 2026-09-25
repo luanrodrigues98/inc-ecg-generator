@@ -5,3 +5,7 @@
 extends: batch_ptbxl_inc_v2.yaml
 output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_inc_exp/all
 max_num_images: 1500
+# handwriting came after this variant was defined: held off here so the variant renders
+# what it did; its effect is measured by batch_ptbxl_inc_exp_handwriting.yaml.
+realism:
+  handwriting: {p: 0.0}

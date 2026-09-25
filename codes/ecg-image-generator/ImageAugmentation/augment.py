@@ -104,6 +104,12 @@ def get_augment(input_file,output_directory,rotate=25,noise=25,crop=0.01,tempera
         ref_h, ref_w = json_dict['gridpoints_reference_hw']
         json_dict['gridpoints_reference_hw'] = [round(ref_h*crop_scale_y, 2),
                                                 round(ref_w*crop_scale_x, 2)]
+    #Pen notes (realism group handwriting): page-level too, so rotated and cropped whatever
+    #bbox/store_text_bounding_box say, like gridpoints above.
+    for note in json_dict.get('handwriting', []):
+        box = rotate_points([note['box']], [w/2, h/2], -rot)
+        box = crop_points(box, crop_top, crop_left, crop_scale_y, crop_scale_x)
+        note['box'] = box[0].tolist()
 
     head, tail = os.path.split(filename)
 

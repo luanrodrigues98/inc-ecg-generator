@@ -184,6 +184,16 @@ def displace_annotations(json_dict,displacement_x,displacement_y,pad_x,pad_y):
             json_dict['gridpoints'] = [[round(float(c) - pad_x,2),round(float(r) - pad_y,2)]
                                        for r,c in zip(rows,cols)]
 
+    #Pen notes (realism group handwriting, handwritten_notes.py): a page-level list, each note
+    #with the four [x,y] corners of its box in the same unpadded render frame, so the same
+    #round trip applies. The ink was written before this stage and deforms with the paper.
+    for note in json_dict.get('handwriting',[]):
+        points = np.asarray(note['box'],dtype=float)
+        rows,cols = invert_displacement(points[:,1] + pad_y,points[:,0] + pad_x,
+                                        displacement_x,displacement_y)
+        note['box'] = [[round(float(c) - pad_x,2),round(float(r) - pad_y,2)]
+                       for r,c in zip(rows,cols)]
+
 #Main function to deform and shade the sheet of paper
 def get_crumpled(input_file,resolution,crumple_amplitude,crumple_scale_cm,
                  illum_azimuth_deg,seed=-1,start_index=-1,json_dict=None):

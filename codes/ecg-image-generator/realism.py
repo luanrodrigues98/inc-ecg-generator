@@ -28,6 +28,17 @@
 #                        600 dpi (paper luminance median 245, p10 236; high-frequency noise
 #                        on the paper ~2 levels; skew median 0.2 deg, max 1.6). Off keeps the
 #                        photographic chain the rest of the configuration sets.
+#  handwriting         - pen notes on the page (handwritten_notes.py): a name, a date, a time,
+#                        a signature, a short remark, written with the upstream handwriting
+#                        model in one of its eight styles. `n_notes` [min, max] per page, by
+#                        `writers` [min, max] hands, each with a pen from `ink` at an `opacity`,
+#                        a line of `stroke_mm` and a digit height of `height_mm`, tilted up to
+#                        `tilt_deg`, as neat as `bias` (higher is neater); `kinds` weighs what
+#                        is written (date, time, name, signature, note) and `regions` where
+#                        (header above the leads, margin below or beside them, between_rows,
+#                        over_trace - the only one that crosses a trace). `avoid_names` keeps
+#                        the ink off the printed lead names. Each note's box goes in the JSON
+#                        as handwriting: [...]. Off writes nothing.
 #
 #A group absent from the block is not drawn and keeps the behaviour the rest of the
 #configuration gives it; the JSON then carries no entry for it.
@@ -50,7 +61,7 @@ FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Fonts')
 #Order is load bearing: every group spends one draw in this order, so a new group goes at
 #the END, or every existing flag of a batch changes.
 GROUPS = ('clinical_lead_order', 'lead_name_position', 'inc_paper', 'inc_trace', 'lead_name_print',
-          'scan_look')
+          'scan_look', 'handwriting')
 
 #Parameters a group takes besides p, with their defaults - measured on the Cardio scans
 #(2026-09-24) where a number is involved.
@@ -72,6 +83,18 @@ DEFAULTS = {
     'scan_look': {'rotate': 1, 'blur_sigma': 0.6, 'exposure': [0.85, 0.97],
                   'contrast': [0.97, 1.05], 'white_point': [0.99, 1.0],
                   'saturation': [0.9, 1.2], 'noise': 2},
+    #Not measured yet on the scans: a ballpoint's line (0.25-0.5 mm) and a hand 3-6 mm tall.
+    #ink: blue ballpoints twice as often as black ones. A kinds / regions mapping replaces
+    #the default whole: a key left out weighs 0.
+    'handwriting': {'n_notes': [1, 4], 'writers': [1, 2],
+                    'kinds': {'date': 0.25, 'time': 0.15, 'name': 0.25, 'signature': 0.15,
+                              'note': 0.2},
+                    'regions': {'header': 0.4, 'margin': 0.2, 'between_rows': 0.25,
+                                'over_trace': 0.15},
+                    'ink': ['#1b2a7c', '#22349a', '#2a3a8c', '#1e2f6e', '#1c1c22', '#2a2a30'],
+                    'opacity': [0.75, 0.95], 'height_mm': [3.0, 6.0], 'stroke_mm': [0.25, 0.5],
+                    'tilt_deg': 6.0, 'bias': [0.6, 1.5], 'styles': [0, 1, 2, 3, 4, 5, 6, 7],
+                    'avoid_names': True},
 }
 
 
@@ -144,8 +167,56 @@ def parse_realism(spec):
                     or not 0 <= out['blur_sigma'] <= 10:
                 raise ValueError("realism: scan_look.blur_sigma must be in [0, 10] px, got %r"
                                  % (out['blur_sigma'],))
+        if group == 'handwriting':
+            _parse_handwriting(out)
         parsed[group] = out
     return parsed or None
+
+
+def _count_range(group, key, value, low_bound, high_bound):
+    if (not isinstance(value, (list, tuple)) or len(value) != 2 or
+            not all(isinstance(v, int) and not isinstance(v, bool) for v in value) or
+            value[0] > value[1] or value[0] < low_bound or value[1] > high_bound):
+        raise ValueError("realism: %s.%s must be [low, high], whole numbers with %d <= low <= high "
+                         "<= %d, got %r" % (group, key, low_bound, high_bound, value))
+    return [int(value[0]), int(value[1])]
+
+
+def _weights(group, key, value, names):
+    if (not isinstance(value, dict) or not value or set(value) - set(names) or
+            not all(isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0
+                    for v in value.values()) or sum(value.values()) <= 0):
+        raise ValueError("realism: %s.%s must map some of %s to weights >= 0 that do not all "
+                         "vanish, got %r" % (group, key, ', '.join(names), value))
+    return {k: float(v) for k, v in value.items()}
+
+
+def _parse_handwriting(out):
+    #Validates in place the parameters of the handwriting group (handwritten_notes.py).
+    group = 'handwriting'
+    out['n_notes'] = _count_range(group, 'n_notes', out['n_notes'], 1, 20)
+    out['writers'] = _count_range(group, 'writers', out['writers'], 1, 5)
+    out['kinds'] = _weights(group, 'kinds', out['kinds'], DEFAULTS[group]['kinds'])
+    out['regions'] = _weights(group, 'regions', out['regions'], DEFAULTS[group]['regions'])
+    if not out['ink'] or not all(is_color_like(c) for c in out['ink']):
+        raise ValueError("realism: handwriting.ink must be a non-empty list of matplotlib colours "
+                         "(quote hex strings in YAML), got %r" % (out['ink'],))
+    out['opacity'] = _range(group, 'opacity', out['opacity'], 0.05, 1.0)
+    out['height_mm'] = _range(group, 'height_mm', out['height_mm'], 0.5, 30.0)
+    out['stroke_mm'] = _range(group, 'stroke_mm', out['stroke_mm'], 0.05, 2.0)
+    out['bias'] = _range(group, 'bias', out['bias'], 0.0, 10.0)
+    tilt = out['tilt_deg']
+    if isinstance(tilt, bool) or not isinstance(tilt, (int, float)) or not 0 <= tilt <= 45:
+        raise ValueError("realism: handwriting.tilt_deg must be in [0, 45] degrees, got %r" % (tilt,))
+    out['tilt_deg'] = float(tilt)
+    styles = out['styles']
+    if not isinstance(styles, (list, tuple)) or not styles or \
+            not all(isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 7 for v in styles):
+        raise ValueError("realism: handwriting.styles must be a non-empty list of the model's "
+                         "style indices 0-7, got %r" % (styles,))
+    if not isinstance(out['avoid_names'], bool):
+        raise ValueError("realism: handwriting.avoid_names must be true or false, got %r"
+                         % (out['avoid_names'],))
 
 
 def draw_realism_flags(seed, record_key, realism):
