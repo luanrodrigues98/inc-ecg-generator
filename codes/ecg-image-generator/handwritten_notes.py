@@ -406,6 +406,8 @@ def plan_notes(cfg, rng):
             note['bias'] = float(rng.uniform(*SIGNATURE_BIAS))
             note['height_mm'] *= float(rng.uniform(*SIGNATURE_SCALE))
             note['underline'] = bool(rng.random() < 0.5)
+        #height_mm bounds every note, the larger signatures and the jitter included.
+        note['height_mm'] = float(np.clip(note['height_mm'], *cfg['height_mm']))
         notes.append(note)
     return writers, notes
 

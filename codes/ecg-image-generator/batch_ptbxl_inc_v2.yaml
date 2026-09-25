@@ -623,7 +623,7 @@ realism:
     regions: {header: 0.4, margin: 0.2, between_rows: 0.25, over_trace: 0.15}
     ink: ['#1b2a7c', '#22349a', '#2a3a8c', '#1e2f6e', '#1c1c22', '#2a2a30']   # blue pens 2:1
     opacity: [0.75, 0.95]
-    height_mm: [3.0, 6.0]      # digit height of the hand; signatures 1.2-1.6x larger
+    height_mm: [5.0, 15.0]     # digit height; bounds every note (signatures are 1.2-1.6x the hand)
     stroke_mm: [0.25, 0.5]     # a ballpoint's line
     tilt_deg: 6.0
     bias: [0.6, 1.5]           # the model's neatness; signatures are written at 0.05-0.3

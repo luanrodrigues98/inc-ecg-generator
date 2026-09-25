@@ -83,7 +83,8 @@ DEFAULTS = {
     'scan_look': {'rotate': 1, 'blur_sigma': 0.6, 'exposure': [0.85, 0.97],
                   'contrast': [0.97, 1.05], 'white_point': [0.99, 1.0],
                   'saturation': [0.9, 1.2], 'noise': 2},
-    #Not measured yet on the scans: a ballpoint's line (0.25-0.5 mm) and a hand 3-6 mm tall.
+    #Not measured yet on the scans: a ballpoint's line (0.25-0.5 mm) and a hand 5-15 mm tall
+    #(the user's call on 2026-09-25, after 3-6 mm read small on the page; it bounds every note).
     #ink: blue ballpoints twice as often as black ones. A kinds / regions mapping replaces
     #the default whole: a key left out weighs 0.
     'handwriting': {'n_notes': [1, 4], 'writers': [1, 2],
@@ -92,7 +93,7 @@ DEFAULTS = {
                     'regions': {'header': 0.4, 'margin': 0.2, 'between_rows': 0.25,
                                 'over_trace': 0.15},
                     'ink': ['#1b2a7c', '#22349a', '#2a3a8c', '#1e2f6e', '#1c1c22', '#2a2a30'],
-                    'opacity': [0.75, 0.95], 'height_mm': [3.0, 6.0], 'stroke_mm': [0.25, 0.5],
+                    'opacity': [0.75, 0.95], 'height_mm': [5.0, 15.0], 'stroke_mm': [0.25, 0.5],
                     'tilt_deg': 6.0, 'bias': [0.6, 1.5], 'styles': [0, 1, 2, 3, 4, 5, 6, 7],
                     'avoid_names': True},
 }
