@@ -4,3 +4,14 @@ format_4_by_3: [["I", "II", "III"], ["aVR", "aVL", "aVF", "AVR", "AVL", "AVF"], 
 leadNames_12: ["III", 'aVF', 'V3', 'V6', 'II', 'aVL', 'V2', 'V5', 'I', 'aVR', 'V1', 'V4']
 tickLength: 8 
 tickSize_step: 0.002 
+# Clinical print layout of a 12-lead record, per number of columns: the page COLUMNS left to
+# right, each one TOP TO BOTTOM, as a printout is read. Column k shows the k-th
+# paper_len/columns window of the frame, so 6x2 is I-aVF over 0-5 s beside V1-V6 over 5-10 s,
+# the same sequential convention the 3x4 follows. helper_functions.lead_layout turns this
+# into ecg_plot's bottom-up draw order; the 4-column entry reproduces leadNames_12 exactly.
+# A column count missing here (3) keeps the upstream flat leadNames_12 order, which has no
+# clinical equivalent.
+lead_layouts:
+  4: [["I", "II", "III"], ["aVR", "aVL", "aVF"], ["V1", "V2", "V3"], ["V4", "V5", "V6"]]
+  2: [["I", "II", "III", "aVR", "aVL", "aVF"], ["V1", "V2", "V3", "V4", "V5", "V6"]]
+  1: [["I", "II", "III", "aVR", "aVL", "aVF", "V1", "V2", "V3", "V4", "V5", "V6"]]

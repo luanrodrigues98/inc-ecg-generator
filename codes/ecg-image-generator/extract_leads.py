@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import AutoMinorLocator
 from TemplateFiles.generate_template import generate_template
 from math import ceil 
-from helper_functions import get_adc_gains,get_frequency,get_leads,load_recording,load_header,find_files, truncate_signal, create_signal_dictionary, standardize_leads, write_wfdb_file
+from helper_functions import get_adc_gains,get_frequency,get_leads,load_recording,load_header,find_files, truncate_signal, create_signal_dictionary, standardize_leads, write_wfdb_file, lead_layout
 from ecg_plot import ecg_plot
 import wfdb
 from PIL import Image, ImageDraw, ImageFont
@@ -16,7 +16,7 @@ from random import randint
 import random
 
 # Run script.
-def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,add_bw,show_grid, add_print, configs, mask_unplotted_samples = False, start_index = -1, store_configs=False, store_text_bbox=True,key='val',resolution=100,units='inches',papersize='',add_lead_names=True,pad_inches=1,template_file=os.path.join('TemplateFiles','TextFile1.txt'),font_type=os.path.join('Fonts','Times_New_Roman.ttf'),standard_colours=5,full_mode='II',bbox = False,columns=-1,trace_thickness_mm=None,trace_thickness_jitter=0.15,trace_dropout_rate=0.0,trace_dropout_length_mm=0.5,lead_name_gap_mm=None,lead_name_gap_jitter_mm=0.0,column_gap_mm=None,column_gap_jitter_mm=0.0,store_gridpoints=False,trace_color=None):
+def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,add_bw,show_grid, add_print, configs, mask_unplotted_samples = False, start_index = -1, store_configs=False, store_text_bbox=True,key='val',resolution=100,units='inches',papersize='',add_lead_names=True,pad_inches=1,template_file=os.path.join('TemplateFiles','TextFile1.txt'),font_type=os.path.join('Fonts','Times_New_Roman.ttf'),standard_colours=5,full_mode='II',bbox = False,columns=-1,trace_thickness_mm=None,trace_thickness_jitter=0.15,trace_dropout_rate=0.0,trace_dropout_length_mm=0.5,lead_name_gap_mm=None,lead_name_gap_jitter_mm=0.0,column_gap_mm=None,column_gap_jitter_mm=0.0,store_gridpoints=False,trace_color=None,lead_name_position=None,lead_name_position_single_column=None):
 
     # Extract a reduced-lead set from each pair of full-lead header and recording files.
     full_header_file = header_file
@@ -80,7 +80,21 @@ def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,ad
     lead_length_in_seconds = configs['paper_len']/columns
     abs_lead_step = configs['abs_lead_step']
     format_4_by_3 = configs['format_4_by_3']
-    
+
+    #Which paper_len/columns window of the frame each lead is cut from: column k of the
+    #printed layout shows the k-th window. The clinical layout table decides it for the
+    #column counts it covers (3x4, 6x2, 12x1); anything else keeps the upstream rule, where
+    #only the 3x4 shifts its windows.
+    layout = lead_layout(configs, columns, full_leads)
+    def window_of(key):
+        if layout is not None:
+            return layout[1].get(key, 0)
+        if columns == 4:
+            for k in (1, 2, 3):
+                if key in format_4_by_3[k]:
+                    return k
+        return 0
+
     segmented_ecg_data = {}
 
     if start_index != -1:
@@ -108,12 +122,8 @@ def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,ad
                         segmented_ecg_data[key] = segmented_ecg_data[key] + nanArray.tolist()
             else:
                 shiftedStart = start
-                if columns == 4 and key in format_4_by_3[1]:
-                    shiftedStart = start + int(rate*lead_length_in_seconds)
-                elif columns == 4 and key in format_4_by_3[2]:
-                    shiftedStart = start + int(2*rate*lead_length_in_seconds)
-                elif columns == 4 and key in format_4_by_3[3]:
-                    shiftedStart = start + int(3*rate*lead_length_in_seconds)
+                if window_of(key) > 0:
+                    shiftedStart = start + int(window_of(key)*rate*lead_length_in_seconds)
                 end = shiftedStart + int(rate*lead_length_in_seconds)
 
                 if(key!='full'+full_mode):
@@ -125,7 +135,7 @@ def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,ad
                         nanArray[:] = np.nan
                     else:
                         nanArray[:] = record_dict[key][start: shiftedStart]
-                    if columns == 4 and key not in format_4_by_3[0]:
+                    if window_of(key) > 0:
                         if key not in segmented_ecg_data.keys():
                             segmented_ecg_data[key] = nanArray.tolist()
                         else:
@@ -187,12 +197,8 @@ def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,ad
                             segmented_ecg_data[key] = segmented_ecg_data[key] + nanArray.tolist()
                 else:
                     shiftedStart = start
-                    if columns == 4 and key in format_4_by_3[1]:
-                        shiftedStart = start + int(rate*lead_length_in_seconds)
-                    elif columns == 4 and key in format_4_by_3[2]:
-                        shiftedStart = start + int(2*rate*lead_length_in_seconds)
-                    elif columns == 4 and key in format_4_by_3[3]:
-                        shiftedStart = start + int(3*rate*lead_length_in_seconds)
+                    if window_of(key) > 0:
+                        shiftedStart = start + int(window_of(key)*rate*lead_length_in_seconds)
                     end = shiftedStart + int(rate*lead_length_in_seconds)
                     
                     if(key!='full'+full_mode):
@@ -205,7 +211,7 @@ def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,ad
                         else:
                             nanArray[:] = record_dict[key][start: shiftedStart]
 
-                        if columns == 4 and key not in format_4_by_3[0]:
+                        if window_of(key) > 0:
                             if key not in segmented_ecg_data.keys():
                                 segmented_ecg_data[key] = nanArray.tolist()
                             else:
@@ -267,7 +273,7 @@ def get_paper_ecg(input_file,header_file,output_directory, seed, add_dc_pulse,ad
         if ecg_frame[i] == {}:
             continue
 
-        x_grid,y_grid = ecg_plot(ecg_frame[i], configs=configs, full_header_file=full_header_file, style=grid_colour, sample_rate = rate,columns=columns,rec_file_name = rec_file, output_dir = output_directory, resolution = resolution, pad_inches = pad_inches, lead_index=full_leads, full_mode = full_mode, store_text_bbox = store_text_bbox, show_lead_name=add_lead_names,show_dc_pulse=dc,papersize=papersize,show_grid=(grid),standard_colours=standard_colours,bbox=bbox, print_txt=print_txt, json_dict=json_dict, start_index=start, store_configs=store_configs, lead_length_in_seconds=lead_length_in_seconds, trace_thickness_mm=trace_thickness_mm, trace_thickness_jitter=trace_thickness_jitter, trace_dropout_rate=trace_dropout_rate, trace_dropout_length_mm=trace_dropout_length_mm, lead_name_gap_mm=lead_name_gap_mm, lead_name_gap_jitter_mm=lead_name_gap_jitter_mm, column_gap_mm=column_gap_mm, column_gap_jitter_mm=column_gap_jitter_mm, store_gridpoints=store_gridpoints, trace_color=trace_color, seed=seed)
+        x_grid,y_grid = ecg_plot(ecg_frame[i], configs=configs, full_header_file=full_header_file, style=grid_colour, sample_rate = rate,columns=columns,rec_file_name = rec_file, output_dir = output_directory, resolution = resolution, pad_inches = pad_inches, lead_index=full_leads, full_mode = full_mode, store_text_bbox = store_text_bbox, show_lead_name=add_lead_names,show_dc_pulse=dc,papersize=papersize,show_grid=(grid),standard_colours=standard_colours,bbox=bbox, print_txt=print_txt, json_dict=json_dict, start_index=start, store_configs=store_configs, lead_length_in_seconds=lead_length_in_seconds, trace_thickness_mm=trace_thickness_mm, trace_thickness_jitter=trace_thickness_jitter, trace_dropout_rate=trace_dropout_rate, trace_dropout_length_mm=trace_dropout_length_mm, lead_name_gap_mm=lead_name_gap_mm, lead_name_gap_jitter_mm=lead_name_gap_jitter_mm, column_gap_mm=column_gap_mm, column_gap_jitter_mm=column_gap_jitter_mm, store_gridpoints=store_gridpoints, trace_color=trace_color, lead_name_position=lead_name_position, lead_name_position_single_column=lead_name_position_single_column, seed=seed)
 
         rec_head, rec_tail = os.path.split(rec_file)
         

@@ -106,6 +106,14 @@ def get_parser():
     parser.add_argument("--lead_name_gap_mm", type=float, default=None)
     parser.add_argument("--lead_name_gap_jitter_mm", type=float, default=0.0)
 
+    # Where each page prints its lead names, drawn once per page: weights over above /
+    # below / level, e.g. 'above:0.6,below:0.4'. level (the name on the baseline, between
+    # the calibration pulse and the trace) only fits a single-column page, so it goes in
+    # --lead_name_position_single_column, which a 12x1 page draws from instead. Default
+    # None prints every name below its trace, reproducing the upstream render.
+    parser.add_argument("--lead_name_position", type=str, default=None)
+    parser.add_argument("--lead_name_position_single_column", type=str, default=None)
+
     # Blank space between columns of a grid layout, replacing the upstream black
     # lead-separator tick. Default None keeps the columns flush and the tick drawn;
     # --column_gap_jitter_mm makes each seam's gap an independent per-frame draw.
@@ -276,6 +284,8 @@ def run_single_file(args):
         trace_color=args.trace_color,
         lead_name_gap_mm=args.lead_name_gap_mm,
         lead_name_gap_jitter_mm=args.lead_name_gap_jitter_mm,
+        lead_name_position=args.lead_name_position,
+        lead_name_position_single_column=args.lead_name_position_single_column,
         column_gap_mm=args.column_gap_mm,
         column_gap_jitter_mm=args.column_gap_jitter_mm,
         store_gridpoints=args.store_gridpoints,

@@ -204,6 +204,33 @@ def standardize_leads(full_leads):
                  full_leads_array[i] = 'aVF'
     return full_leads_array
 
+def lead_layout(configs, columns, leads):
+    #Clinical print layout of a frame: which lead each grid slot shows, and which time
+    #window each lead is cut from. configs['lead_layouts'][columns] lists the page columns
+    #left to right, each one top to bottom (config.yaml). Returns (plot_order, column_of):
+    #  plot_order - the leads in the order ecg_plot draws them: row by row from the BOTTOM
+    #               of the page, left to right within a row. ecg_plot grows y_offset upward
+    #               and starts a new row every `columns` leads, so the top row comes last.
+    #  column_of  - lead name -> column index k. The lead shows the k-th paper_len/columns
+    #               window of the frame.
+    #None when the table has no entry for this column count, or when the record's leads are
+    #not exactly the table's; callers then keep the upstream behaviour.
+    table = (configs.get('lead_layouts') or {}).get(columns)
+    if table is None:
+        return None
+    if sorted(str(lead) for column in table for lead in column) != sorted(str(lead) for lead in leads):
+        return None
+    n_rows = len(table[0])
+    if any(len(column) != n_rows for column in table):
+        raise ValueError('lead_layouts[%d]: every column must list the same number of leads' % columns)
+    plot_order = [table[c][r] for r in reversed(range(n_rows)) for c in range(len(table))]
+    column_of = {lead: c for c, column in enumerate(table) for lead in column}
+    #The 3x4 entry is the upstream layout written the readable way round, and the upstream
+    #render depends on it staying byte for byte identical.
+    if columns == 4 and 'leadNames_12' in configs and plot_order != list(configs['leadNames_12']):
+        raise ValueError('lead_layouts[4] no longer reproduces leadNames_12')
+    return plot_order, column_of
+
 def rotate_bounding_box(box, origin, angle):
     angle = math.radians(angle)
 

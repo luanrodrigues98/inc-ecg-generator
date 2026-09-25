@@ -27,7 +27,7 @@
 #
 #Usage:
 #    .venv310/bin/python run_batch_from_config.py batch_ptbxl_3000.yaml
-import os, sys, copy, glob, json, random, shutil, tempfile, zlib, contextlib, yaml
+import os, sys, copy, glob, json, math, random, shutil, tempfile, zlib, contextlib, yaml
 import joblib
 import numpy as np
 from joblib import Parallel, delayed
@@ -46,11 +46,12 @@ from matplotlib.colors import is_color_like
 from helper_functions import find_records
 from gen_ecg_images_from_data_batch import get_parser
 from gen_ecg_image_from_data import run_single_file
+from ecg_plot import parse_lead_name_position_weights, standard_major_colors
 from CameraPhotometry.photometry import LEVELS_MIN_SPAN, HUE_ROTATION_MAX
 from CameraSensor.sensor import SUPERSAMPLE_MAX, SENSOR_NOISE_MAX
 
 REQUIRED_KEYS = ('input_directory', 'output_directory')
-DRAWS = ('choice', 'uniform', 'randint')
+DRAWS = ('choice', 'uniform', 'randint', 'loguniform')
 
 
 @contextlib.contextmanager
@@ -146,11 +147,18 @@ def record_is_finished(output_root, name, store_config):
 
 
 def draw(spec, rng):
-    """Draw one value from a randomize entry: choice, uniform or randint."""
+    """Draw one value from a randomize entry: choice, uniform, randint or loguniform.
+
+    loguniform is uniform in log(value): as much mass in 0.07-0.14 as in 0.25-0.5. It spends
+    exactly one rng.random(), like uniform, so turning a key from uniform to loguniform does
+    not shift the draws of the keys that sort after it.
+    """
     kind = next(iter(spec))
     if kind == 'choice':
         return rng.choice(spec[kind])
     low, high = spec[kind]
+    if kind == 'loguniform':
+        return math.exp(rng.uniform(math.log(low), math.log(high)))
     return rng.uniform(low, high) if kind == 'uniform' else rng.randint(low, high)
 
 
@@ -174,6 +182,10 @@ def validate_randomize(randomize, known, static_keys, config_path):
                 raise SystemExit(
                     "%s: randomize: %s.%s must be [low, high] with low <= high"
                     % (config_path, key, kind))
+            if kind == 'loguniform' and bounds[0] <= 0:
+                raise SystemExit(
+                    "%s: randomize: %s.loguniform needs low > 0, got %s - the draw is uniform "
+                    "in log(value)" % (config_path, key, bounds[0]))
         elif not spec[kind]:
             raise SystemExit("%s: randomize: %s.choice is empty" % (config_path, key))
 
@@ -631,6 +643,43 @@ def build_args(config, config_path):
                 "string such as '#10307a' - unquoted, YAML reads the # as a comment and the "
                 "value arrives empty - a colour name, or an [r, g, b] list with each channel "
                 "in 0-1, not 0-255." % (config_path, colour))
+
+    #The lead-name position weights reach ecg_plot only when a frame renders, so a typo
+    #would surface hours into the batch; parse them here. They are already a PER-PAGE draw
+    #inside ecg_plot, so drawing the weights themselves per record would be a double draw.
+    #level opens a name slot between pulse and trace, which only a single-column page has
+    #room for: it belongs in lead_name_position_single_column, not in the grid weights.
+    for key in ('lead_name_position', 'lead_name_position_single_column'):
+        if key in randomize:
+            raise SystemExit(
+                "%s: %s cannot go under randomize:. It is a set of weights ecg_plot already "
+                "draws from once per page; set it as a fixed value." % (config_path, key))
+        try:
+            parsed = parse_lead_name_position_weights(getattr(args, key))
+        except ValueError as error:
+            raise SystemExit("%s: %s" % (config_path, error))
+        if key == 'lead_name_position' and parsed and any(
+                name == 'level' and p > 0 for name, p in parsed):
+            raise SystemExit(
+                "%s: lead_name_position gives 'level' a weight, but level fits only a "
+                "single-column page - a grid has no room for a name slot in front of every "
+                "column. Put it in lead_name_position_single_column." % config_path)
+
+    #standard_grid_color indexes the palettes in ecg_plot (1-9; 7-9 also tint the paper). An
+    #index outside them raises a KeyError on whichever record draws it, hours into the batch.
+    if 'standard_grid_color' in randomize:
+        spec = randomize['standard_grid_color']
+        kind = next(iter(spec))
+        grid_colours = spec[kind] if kind == 'choice' else list(range(spec[kind][0], spec[kind][1] + 1))
+    else:
+        grid_colours = [args.standard_grid_color]
+    for colour in grid_colours:
+        if isinstance(colour, bool) or not isinstance(colour, int) or \
+                'colour%d' % colour not in standard_major_colors:
+            raise SystemExit(
+                "%s: standard_grid_color %r is not a palette index. The palettes are 1 brown, "
+                "2 pink, 3 blue, 4 green, 5 red, 6 black, 7 INC pink strip, 8 CLB orange, "
+                "9 CLB white (7-9 also tint the paper)." % (config_path, colour))
 
     #skip_existing is read as a switch, so anything but the two states is a typo rather
     #than a setting. YAML true/false arrive as bools and pass here unchanged.
