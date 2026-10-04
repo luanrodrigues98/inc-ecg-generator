@@ -1,0 +1,60 @@
+{
+  "skill_name": "calibrate-from-real",
+  "notes": "Inputs are real patient pages and live outside the repository, under ~/.cache/inc-ecg-generator-run/calibrate-from-real-workspace/inputs/. The grading keys are kept apart from both the skill and the workspace, so that no run can read an answer; whoever grades knows where. Evals 1 and 2 do not render and may run in parallel; eval 3 renders a probe lot, so its with-skill and baseline runs go one after the other (RAM). Every run's prompt carries the hard rules (CPU only, probe of at most 24 pages at 400 dpi, nothing existing modified, no training, no commit, nothing published) and an output directory of its own. Since 2026-10-03 generator-options.md records what the eval-3 probes found about palettes 7/8/9 (CLB paper near-white, palette 8 salmon paper matches no CLB sheet): eval 3 no longer tests whether a run discovers that by itself.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "blind-gap-discovery",
+      "prompt": "Chegou um lote novo de ECGs reais, sem rótulo, em ~/.cache/inc-ecg-generator-run/calibrate-from-real-workspace/inputs/blind_lot (68 PNGs). Quero saber em que o gerador sintético ainda não representa essas imagens: quais são as lacunas, com que frequência aparecem e em quais páginas. Por enquanto é só o diagnóstico: não renderize lote-sonda nem escreva YAML.",
+      "expected_output": "A gap report grounded in pages of the lot: each reference gap of the grading key found and tied to a page that shows it; frequencies with their n; the identical-pixel pair reported; no render, no YAML, generator repository untouched.",
+      "files": [],
+      "assertions": [
+        "Reference gap 1 of the grading key is reported and tied to a lot page that shows it",
+        "Reference gap 2 of the grading key is reported and tied to a lot page that shows it",
+        "Reference gap 3 of the grading key is reported and tied to a lot page that shows it",
+        "Reference gap 4 of the grading key is reported and tied to a lot page that shows it",
+        "Reference gap 5 of the grading key is reported and tied to a lot page that shows it",
+        "A label-free ranking of the pages exists and at least 7 of the 8 key pages are among its 12 worst",
+        "The two files with identical pixels are reported as duplicates of each other",
+        "Every gap in the report cites at least one page of the lot by name",
+        "Gap frequencies are given as counts with their sample size (k of n), not bare percentages or adjectives",
+        "Each gap is classed as covered by an existing generator option (with the option named) or as needing a new feature",
+        "Nothing was rendered, no YAML was written, and the generator repository and the datasets are unchanged",
+        "Both sheets of the lot that were photographed twice are reported as repeats of one exam",
+        "Gap frequencies carry an interval, so a reader can tell a real difference from sampling noise"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "in-distribution-control",
+      "prompt": "Esses 9 scans em ~/.cache/inc-ecg-generator-run/calibrate-from-real-workspace/inputs/pink_3x4 são tiras rosa 3x4 do INC, tiradas do cache do Cardio (os nomes dos arquivos são os do cache). O gerador v2 já cobre esse formato ou ainda falta alguma coisa? Só o diagnóstico, sem render e sem YAML.",
+      "expected_output": "A verdict that the lot is in distribution: no serious gap, no high-priority feature request; the evidence (proxy and leads per page, audit) shown; small differences reported as small.",
+      "files": [],
+      "assertions": [
+        "The verdict states that the generator already covers these pages (in distribution), with no serious gap",
+        "No gap is given high priority and no high-priority feature request is written",
+        "The verdict is backed by a measured detector result on these 9 pages (leads kept per page or a confidence-based score)",
+        "All 9 pages were oriented correctly before measuring (matches labels/cardio_orientation.csv)",
+        "Nothing was rendered, no YAML was written, and the generator repository and the datasets are unchanged"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "new-lot-recalibrate",
+      "prompt": "Chegou um lote novo em ~/.cache/inc-ecg-generator-run/calibrate-from-real-workspace/inputs/new_lot, recalibre o gerador.",
+      "expected_output": "The full flow: hygiene (truncated PNG reported, same-sheet rescans grouped, orientation decided by looking), ranking, audit, profile, a gap table with frequency and example pages, a NEW batch YAML with proposed probabilities, a real-vs-synthetic contact sheet kept local, and ready commands for generation, training and evaluation; nothing trained, nothing overwritten, nothing committed.",
+      "files": [],
+      "assertions": [
+        "The truncated PNG of the lot is reported as damaged or truncated",
+        "The orientation decided for the pages matches the grading key on at least 28 of the 30 files",
+        "The 300 dpi and 600 dpi rescans of the same sheet are reported as the same exam (the pairs of the grading key)",
+        "A gap table gives, for each gap, a frequency with its sample size and example pages of the lot",
+        "A NEW batch YAML with proposed probabilities exists, extends the current recipe, points at a new output directory, and loads through the runner (load_config + build_args) without error",
+        "A real-vs-synthetic contact sheet image exists, stored locally with _LOCAL in its name",
+        "Ready-to-run commands for generation, training (nb 4.3, started by the user) and evaluation are written down",
+        "No existing batch YAML or dataset directory was modified, any render stayed within a small probe lot (at most 24 pages), no training was started, no commit was made",
+        "No image of a real page was published or uploaded anywhere"
+      ]
+    }
+  ]
+}

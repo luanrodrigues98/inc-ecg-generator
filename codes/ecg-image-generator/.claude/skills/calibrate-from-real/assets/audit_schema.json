@@ -1,0 +1,165 @@
+{
+  "single": {
+    "channel": [
+      "scan",
+      "photo",
+      "scanner_app",
+      "photocopy",
+      "screen_photo",
+      "unsure"
+    ],
+    "layout": [
+      "3x4_rhythm",
+      "3x4",
+      "6x2",
+      "6x2_rhythm",
+      "12x1",
+      "other"
+    ],
+    "bordered_panels": [
+      "yes",
+      "no"
+    ],
+    "name_vocabulary": [
+      "I_II_III",
+      "DI_DII_DIII",
+      "other",
+      "none_visible"
+    ],
+    "name_position": [
+      "above",
+      "below",
+      "level",
+      "cell_corner",
+      "mixed",
+      "none_visible"
+    ],
+    "paper_color": [
+      "white",
+      "pink",
+      "orange_salmon",
+      "blue",
+      "green",
+      "grey",
+      "yellowed",
+      "other"
+    ],
+    "grid_color": [
+      "red_pink",
+      "orange",
+      "blue",
+      "green",
+      "grey_black",
+      "brown",
+      "none",
+      "other"
+    ],
+    "grid_style": [
+      "continuous",
+      "dotted",
+      "major_only",
+      "absent"
+    ],
+    "trace_color": [
+      "black",
+      "warm_grey",
+      "blue",
+      "grey",
+      "other"
+    ],
+    "trace_weight": [
+      "thin",
+      "medium",
+      "thick"
+    ],
+    "calibration_pulse": [
+      "left",
+      "right",
+      "both",
+      "each_segment",
+      "absent"
+    ],
+    "color_mode": [
+      "color",
+      "black_and_white"
+    ],
+    "in_distribution": [
+      "yes",
+      "partly",
+      "no"
+    ],
+    "rhythm_lead": [
+      "II",
+      "I",
+      "III",
+      "V1",
+      "V5",
+      "other",
+      "none"
+    ]
+  },
+  "multi": {
+    "page_furniture": [
+      "printed_header",
+      "printed_footer",
+      "device_text",
+      "field_labels",
+      "handwriting",
+      "stamp",
+      "sticker",
+      "barcode",
+      "punch_holes",
+      "edge_marks",
+      "none"
+    ],
+    "degradations": [
+      "perspective",
+      "shadow",
+      "shadow_edged",
+      "moire",
+      "blur",
+      "low_resolution",
+      "jpeg_artifacts",
+      "color_cast",
+      "folds_creases",
+      "glare",
+      "cropped_leads",
+      "background_clutter",
+      "skew_over_3deg",
+      "faded_trace",
+      "rows_overlap",
+      "none"
+    ]
+  },
+  "free_text": [
+    "printer_format",
+    "population",
+    "exam_stamp",
+    "notes"
+  ],
+  "required": [
+    "slug",
+    "group",
+    "channel",
+    "layout",
+    "bordered_panels",
+    "name_vocabulary",
+    "name_position",
+    "rhythm_lead",
+    "paper_color",
+    "grid_color",
+    "grid_style",
+    "trace_color",
+    "trace_weight",
+    "calibration_pulse",
+    "color_mode",
+    "page_furniture",
+    "degradations",
+    "population",
+    "in_distribution",
+    "notes"
+  ],
+  "numeric_optional": [
+    "row_pitch_mm"
+  ]
+}
