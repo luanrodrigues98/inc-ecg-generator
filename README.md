@@ -101,11 +101,20 @@ These flags change what is drawn on the page itself, before any camera or scan e
 - `--trace_dropout_rate`: Rate of stylus dropouts, stretches where the trace fades or breaks; default: 0 (none). `--trace_dropout_length_mm` (default 0.5) sets their typical length.
 - `--lead_name_gap_mm`: Gap between a lead's name and its baseline; default: None (the fixed upstream 7 mm). `--lead_name_gap_jitter_mm` (default 0) varies it per page.
 - `--column_gap_mm`: Blank space between grid columns, replacing the upstream black lead-separator tick; default: None (keeps the tick). `--column_gap_jitter_mm` (default 0) varies it per page.
-- `--store_gridpoints`: Store the pixel coordinates of the grid intersections in the JSON as `gridpoints`. Needs `--store_config`.
+- `--store_gridpoints`: Store the ground truth of the paper lattice, one node per major (5 mm) grid-line intersection over the whole page, as `[x, y]` pixel coordinates of the delivered PNG. It is meant for training a rectifier that detects the grid. Needs `--store_config` 1 or 2, and the run stops with an error without it. The JSON gets:
+     - `gridpoints`: the nodes as a flat list of `[x, y]` pairs in row-major order, the first row being the top of the page, and `gridpoints_shape`: `[rows, cols]` to reshape it.
+     - `gridpoints_mask`: a `rows x cols` grid of booleans, true when the node falls inside the delivered image. A node pushed out of the frame by the rotation or the crop keeps its real coordinate and is masked false instead of being set to (0, 0).
+     - `gridpoints_mm_per_step` (5.0) and `gridpoints_reference_hw`, the size of the lattice before the distortions.
+
+     The coordinates follow the crumple, the resample, the rotation and the crop, as the lead boxes do. Two `.npy` files with the nodes and the mask are written next to each JSON (`*.gridpoint_xy.npy`, `*.gridpoint_mask.npy`).
 
 Same record and seed, one flag changed per panel:
 
 ![Trace and layout flags](documentation/examples/trace_and_layout.jpg)
+
+The `--store_gridpoints` nodes drawn over the PNG, in blue (only the nodes the mask keeps). Left: the plain page. Right: the same page with a crumple, a rotation and a crop, where the nodes follow the paper (the orange tint is the colour-temperature draw of `--augment`):
+
+![Grid points over the image](documentation/examples/gridpoints.jpg)
 
 ### Camera and scan chain
 After the page is drawn, an optional chain of physical effects makes it look photographed or scanned. Every parameter is neutral at its default, and at the neutral value the stage does not touch the image, so a run with the defaults is the same image as before the stage existed. Each `*_jitter*` parameter draws a per-record variation around its base value, and the matching `--deterministic_*` flag fixes the value instead of drawing it. The stages run in this order:
