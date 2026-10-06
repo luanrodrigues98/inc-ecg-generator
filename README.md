@@ -59,6 +59,14 @@ The basic mode of the tool creates ECG images without distortions. The mode of o
 - `--print_header`: Add text from header file on all the generated images; default: False
 - `--add_qr_code`: Add QR code to all the generated images, default: False. The QR code links to the relative path of the WFDB file used to generate the ECG image. 
 - `--num_columns` : Number of columns of the ECG leads. The default(-1) will plot a single column for 2 lead data and 4 columns for the 12 or any other number of lead data. Default: -1; type: int. For a 12-lead record, 4, 2 and 1 columns print in the clinical lead order set by `lead_layouts` in `config.yaml`: 3x4 (`I aVR V1 V4 / II aVL V2 V5 / III aVF V3 V6`), 6x2 (`I`-`aVF` beside `V1`-`V6`) and 12x1 (`I` to `V6`, top to bottom). Column k shows the k-th `paper_len/num_columns` window of the frame, so the 6x2 prints its limb leads over 0-5 s and its chest leads over 5-10 s. Other column counts (3) keep the upstream flat order, which has no clinical equivalent.
+
+     Layouts and lead-name positions, from `SampleData/PTB_XL_data/00001_lr` at `-se 42` (the 6x2 and 12x1 pages are drawn with `--realism '{"clinical_lead_order": 1}'`):
+
+     ![Layouts and lead-name positions](documentation/examples/layouts_and_names.jpg)
+
+     Grid palettes `--standard_grid_color` 5, 7, 8 and 9 on the same record:
+
+     ![Paper palettes](documentation/examples/paper_palettes.jpg)
 - `--full_mode`: Sets the lead to add at the bottom of the paper ECG as a long strip obtained from the WFDB record's `.hea` header file, if the lead II is not available plots the first lead from the header file; default: `'II'`; type: str
 - `--mask_unplotted_samples`: Mask the samples not plotted in the images in the generated WFDB signal file; default: False. For example: for the 3x4 format, the code plots 2.5 seconds of each lead on the image and saves the complete signal in the WFDB file. If the flag is set, the code will mask the part of the signal not plotted in the image (In this case, t > 2.5seconds) with Nan values in the modified WFDB file. 
 - `--max_num_images`: Number of ECG images to be generated, if max_num_images is less than the number of files in the input directory it will generate maximum number of images and the order is dependent on the OS library; default: all files in the input directory; type: int
@@ -95,6 +103,10 @@ These flags change what is drawn on the page itself, before any camera or scan e
 - `--column_gap_mm`: Blank space between grid columns, replacing the upstream black lead-separator tick; default: None (keeps the tick). `--column_gap_jitter_mm` (default 0) varies it per page.
 - `--store_gridpoints`: Store the pixel coordinates of the grid intersections in the JSON as `gridpoints`. Needs `--store_config`.
 
+Same record and seed, one flag changed per panel:
+
+![Trace and layout flags](documentation/examples/trace_and_layout.jpg)
+
 ### Camera and scan chain
 After the page is drawn, an optional chain of physical effects makes it look photographed or scanned. Every parameter is neutral at its default, and at the neutral value the stage does not touch the image, so a run with the defaults is the same image as before the stage existed. Each `*_jitter*` parameter draws a per-record variation around its base value, and the matching `--deterministic_*` flag fixes the value instead of drawing it. The stages run in this order:
 
@@ -114,6 +126,14 @@ After the page is drawn, an optional chain of physical effects makes it look pho
 | Sensor noise | `--sensor_noise`, `--sensor_noise_jitter_log2` | 0, 0 |
 
 `--supersample N` renders the page at N times the output resolution and integrates it back down onto the sensor grid, which is how a camera sampling a printed trace behaves. The cost grows with the square of N (maximum 4), and so does the memory of the intermediate image, so a large N should be run with few workers. `--output_width` and `--output_height` set the delivered size and must keep the render's aspect ratio. The valid range of each parameter is checked when the run starts, and an out-of-range value is refused. The reasoning behind each stage, and the order they were added in, is in [the parameter roadmap](./documentation/ROTEIRO_PARAMETROS_ECG.md), which is written in Portuguese.
+
+The panels below change one parameter each on the same record and seed, with strong values so the effect shows at this size. Effects that act on the whole page:
+
+![Camera chain, whole page](documentation/examples/camera_chain_page.jpg)
+
+Effects that are easier to see up close (the same crop of the first lead in every panel):
+
+![Camera chain, close-up](documentation/examples/camera_chain_closeup.jpg)
 
 ## Running a batch from a YAML file
 For a large run, `run_batch_from_config.py` describes the whole batch in one reviewable file instead of a long command line:
