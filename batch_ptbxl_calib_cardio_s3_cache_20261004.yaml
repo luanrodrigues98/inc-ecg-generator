@@ -1,0 +1,117 @@
+# PROPOSAL, not a result: ptbxl_synthetic_calib_cardio_s3_cache_20261004, 3000 ECG pages for
+# retraining the 12-lead YOLO-OBB, recalibrated against the 103 exams of the digitizer's
+# datasets/cardio_s3_cache with the calibrate-from-real skill on 2026-10-04.
+#
+# The user starts the render (never the calibration):
+#     .venv310/bin/python .claude/skills/calibrate-from-real/scripts/preflight.py \
+#         batch_ptbxl_calib_cardio_s3_cache_20261004.yaml --full
+# and then the nohup line it prints. Run report, evidence and commands:
+#     ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache-20261004/  (gaps.md, commands.md)
+#
+# It EXTENDS batch_ptbxl_inc_v2.yaml and lists only what changes. Every value below comes
+# from the lot: a share of the 36-page control sample (90% Wilson interval) or a measured
+# range of the page profile. Nothing was fitted against a trained model; what decides is a
+# YOLO trained on this set and scored by eval_task.py.
+#
+# TWO CAVEATS
+#   - cardio_s3_cache is also the set that measures "leads per page on the Cardio scans".
+#     A model trained on this set is scored optimistically there; the independent number
+#     is the labelled set's (names right, centre metric).
+#   - The lot's main gaps are things no option draws: the 113 mm strip with 24 mm between
+#     rows, punch holes over the first lead row, the CLB sheet's "CAL" pulse at the right
+#     end, the Cardioline format. They are feature requests (run directory), not this YAML.
+#
+# Each change is marked with the reading it holds under:
+#   [reference] the lot stands for what the digitizer receives: the value moves to the
+#               lot's share;
+#   [both]      it corrects a measured mismatch, whatever the lot stands for.
+# The user decided on 2026-10-04 that the lot IS the reference, for every share - the
+# acquisition channel included, the one share the lot cannot vouch for by itself (its 90%
+# of flatbed scans describes one scanning campaign, February to April 2025).
+extends: batch_ptbxl_inc_v2.yaml
+
+# A NEW directory: the runner writes flat, and ptbxl_synthetic_inc_v2 stays as it is.
+output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261004
+
+max_num_images: 6000
+
+# randomize: and realism: merge entry by entry with the base; every other key replaces it.
+randomize:
+  # [reference] Layout. Control: 3x4 + rhythm 35/36 (97%, 88-99%), 12x1 1/36 (3%, 1-12%),
+  # 6x2 0/36 (0-7%; one among the worst pages and one outside the audit). v2 draws
+  # 60/20/20; this draws 80/10/10 and keeps mass on the two layouts the lot barely shows.
+  # The list has another length than the base's, so every randomize: key sorting after
+  # num_columns is re-rolled: harmless in a new dataset, but a page here differs from its
+  # namesake in ptbxl_synthetic_inc_v2 in more than the layout.
+  num_columns:
+    choice: [4, 4, 4, 4, 4, 4, 4, 4, 2, 1]
+
+# [reference] Lead names. Control: above the trace on 35 of 35 grid pages (97% of the
+# sample, 88-99%); "below" only on the Cardioline 3x4 (2 of the 10 worst), and there the
+# name hugs the baseline, which the 8-12 mm gap cannot draw. v2 draws above on 60%.
+lead_name_position: 'above:0.9,below:0.1'
+
+# [reference] Share of pages with the calibration pulse at the LEFT of the rows. Control:
+# 17/36 (47%, 34-61%) - the pink strip and the Cardioline. The CLB sheet (19/36) prints it
+# at the right end, which the generator cannot draw: its rows start with the trace. v2
+# draws a left pulse on 95% of the pages. The draw is independent of the paper, so a
+# pink-strip page loses its pulse as often as a CLB page does.
+calibration_pulse: 0.6
+
+# A group listed here is rebuilt from realism.py's DEFAULTS plus what is written, not from
+# the base recipe: every group below is therefore written out whole.
+realism:
+  # [reference] p stays 0.75: INC paper on a flatbed scan is 31/36 of the control sample
+  # (86%, 73-93%), and 0.75 is inside that interval. The pink : CLB split of v2 (56 : 44)
+  # already matches the lot (53 : 40 exams). What moves is the split INSIDE the CLB sheets.
+  # Palette 8's salmon PAPER matches no CLB sheet (their paper is near-white); what it
+  # does resemble, at the detector's scale, is the page TONE of the dense sheets. Measured
+  # tone: 29 of the 36 CLB sheets are nearer palette 9 (243/240/243 in the probe), 7 nearer
+  # palette 8 (254/204/185) - 19%, 11-32%. v2 gives palette 8 half of the CLB pages; this
+  # gives it a quarter.
+  inc_paper:
+    p: 0.75
+    palettes: [7, 7, 7, 7, 7, 9, 9, 9, 8]
+  # [reference] Trace colour. Control: blue 16/36 (44%, 32-58%; every CLB pen trace),
+  # black or dark grey 11/36, warm grey 9/36. v2 has 2 blues in 11 (about 26% of blue
+  # traces over the whole recipe); 5 in 12 gives about 44%. Width untouched: the real
+  # FWHM (pink 0.13-0.20 mm, CLB 0.23-0.28 mm, Cardioline 0.30-0.43 mm) is inside what
+  # 0.05-0.4 mm draws.
+  inc_trace:
+    p: 0.75
+    colors: ['#5d4b3c', '#6c574a', '#8c7369', '#b4968c', '#414141', '#5c5c5c', '#7a7a7a', '#1a3a8f', '#2451b0', '#132968', '#1a3a8f', '#2451b0']
+    thickness_mm: [0.05, 0.4]
+  # [reference] p. Control: flatbed scan on 32/36 pages (89%, 77-95%); 93 of the 103
+  # exams. v2 sends half the pages through the phone-photo chain. 0.85 keeps 15% of
+  # photos: the lot's other 10 exams are low-resolution photos and scanner-app images.
+  # [both] exposure. Palettes 7-9 already store the paper as the scanner saw it, and
+  # [0.85, 0.97] darkened it a second time: the pink strip's paper measured 232 / 236 /
+  # 241 (p5 / median / p95) on v2 scan pages against 242 / 247 / 249 (p10 / median / p90)
+  # on the 50 real strips. With [0.90, 1.02] the probe lot measured 237 / 246 / 249.
+  # Everything else as in v2.
+  scan_look:
+    p: 0.85
+    rotate: 1
+    blur_sigma: 0.6
+    exposure: [0.90, 1.02]
+    contrast: [0.97, 1.05]
+    white_point: [0.99, 1.0]
+    saturation: [0.9, 1.2]
+    noise: 2
+  # [reference] p. Control: pen notes on 13/36 pages (36%, 24-50%); v2's 0.7 was an
+  # estimate waiting for this measurement. Regions untouched: 13 pages do not move them
+  # (header 8, margin 4, over a trace 1, between rows 0).
+  handwriting:
+    p: 0.4
+    n_notes: [1, 4]
+    writers: [1, 2]
+    kinds: {date: 0.25, time: 0.15, name: 0.25, signature: 0.15, note: 0.2}
+    regions: {header: 0.4, margin: 0.2, between_rows: 0.25, over_trace: 0.15}
+    ink: ['#1b2a7c', '#22349a', '#2a3a8c', '#1e2f6e', '#1c1c22', '#2a2a30']
+    opacity: [0.75, 0.95]
+    height_mm: [5.0, 15.0]
+    stroke_mm: [0.25, 0.5]
+    tilt_deg: 6.0
+    bias: [0.6, 1.5]
+    styles: [0, 1, 2, 3, 4, 5, 6, 7]
+    avoid_names: true

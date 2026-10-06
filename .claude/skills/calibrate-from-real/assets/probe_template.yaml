@@ -1,0 +1,54 @@
+# PROBE LOT of a calibration run (calibrate-from-real): a handful of pages for ONE population
+# of the real lot, to measure with profile_pages.py and to look at beside the real pages.
+# Copy to <run_dir>/probe_<population>.yaml, fill the <...> fields, then:
+#
+#     cd <generator root>
+#     ./.venv310/bin/python .claude/skills/calibrate-from-real/scripts/preflight.py <this file> --probe
+#     ./.venv310/bin/python run_batch_from_config.py <this file>        # only if preflight says OK
+#
+# It never replaces a recipe: it EXTENDS the current one and lists only what changes. The
+# path is absolute because this file lives outside the generator, and extends: resolves
+# against the file's own directory.
+extends: /home/luan-rodrigues/faculdade/inc-ecg-generator/batch_ptbxl_inc_v2.yaml
+
+# A NEW directory, under the run. The runner writes flat, so rendering into a directory that
+# already holds pages interleaves two datasets under one name; preflight refuses it.
+output_directory: <run_dir>/probe_<population>
+
+# The limits of a probe: preflight --probe refuses more than 24 pages, more than one worker,
+# or more than 450 dpi. About 30 s a page.
+max_num_images: 8
+max_workers: 1
+
+# randomize: and realism: MERGE entry by entry with the base; every other key replaces it.
+randomize:
+  # Pinned to 400 dpi: the RAM peak grows with dpi^2 (21.6 GB at 598 dpi, ~10 GB here).
+  # Kept as a randint so the entry still spends one draw of the per-record stream and no
+  # other key of this block is re-rolled against the base recipe.
+  resolution:
+    randint: [400, 400]
+  # Example - a population that is all 3x4 pages. A choice list of another LENGTH re-rolls
+  # every key that sorts after it; harmless in a new dataset, but the pages then differ
+  # from their namesakes in the base dataset in more than the layout.
+  # num_columns:
+  #   choice: [4]
+
+# One population = one set of traits that go together. The generator draws its options
+# independently, so a population whose traits are tied (pink strip AND flatbed scan AND
+# names above) needs its groups pinned here, at p 1.0 or 0.0, rather than left to chance.
+#
+# A group listed here is rebuilt from realism.py's DEFAULTS plus what you write: it does NOT
+# inherit the base recipe's parameters for that group. Today the defaults equal the v2
+# recipe; if the base ever moves away from them, copy the whole group, not just its p.
+#
+# TRAP: uncomment "realism:" only together with at least one entry under it. A bare
+# "realism:" is null in YAML, and null REPLACES the base block - every group silently off,
+# i.e. the old generator's pages. preflight prints the realism block it loaded: read it.
+# realism:
+#   scan_look: {p: 1.0}        # every page a flatbed scan
+#   inc_paper: {p: 1.0, palettes: [7]}
+#   handwriting: {p: 0.6}
+
+# Name placement weights, when the audit's control sample says otherwise.
+# lead_name_position: 'above:0.9,below:0.1'
+# lead_name_position_single_column: 'level:0.6,above:0.1,below:0.3'

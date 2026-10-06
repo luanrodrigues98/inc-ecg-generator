@@ -1,0 +1,510 @@
+% Apresentação para público não técnico: melhorias do gerador de imagens de ECG
+% (branch upstream-baseline, a partir de 2ae7d56) e as etapas do leitor de ECG que usam
+% essas imagens (inc-ecg-digitizer). Figuras: make_figures.py e make_figures_digitizer.py.
+%
+%   latexmk -pdf apresentacao_modificacoes.tex
+\documentclass[aspectratio=169,10pt]{beamer}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazil]{babel}
+\usepackage{lmodern}
+\DeclareUnicodeCharacter{2212}{\ensuremath{-}}
+\DeclareUnicodeCharacter{2192}{\ensuremath{\rightarrow}}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,calc}
+
+\usetheme[progressbar=frametitle,numbering=fraction,block=fill]{metropolis}
+
+\definecolor{incred}{HTML}{D7141A}
+\definecolor{incgray}{HTML}{3C3C3B}
+\definecolor{incpaper}{HTML}{F6F4F2}
+\setbeamercolor{frametitle}{bg=white,fg=incgray}
+\setbeamercolor{progress bar}{fg=incred,bg=incred!15}
+\setbeamercolor{title separator}{fg=incred}
+\setbeamercolor{alerted text}{fg=incred}
+\setbeamercolor{normal text}{fg=incgray,bg=white}
+\setbeamercolor{block title}{bg=incgray!12,fg=incgray}
+\setbeamercolor{block body}{bg=incgray!5,fg=incgray}
+\setbeamerfont{frametitle}{series=\bfseries,size=\large}
+
+\graphicspath{{figuras/}}
+
+% Logo do INC no canto superior direito de todo frame com título.
+\addtobeamertemplate{frametitle}{}{%
+  \begin{tikzpicture}[remember picture,overlay]
+    \node[anchor=north east,inner sep=5pt] at (current page.north east)
+      {\includegraphics[height=0.72cm]{logo_inc.jpg}};
+  \end{tikzpicture}}
+
+% \painel{largura}{cor do selo}{texto do selo}{legenda}{arquivo}
+\newcommand{\painel}[5]{%
+  \begin{tikzpicture}[baseline=(img.north)]
+    \node[inner sep=0,draw=incgray!30] (img) {\includegraphics[width=#1]{#5}};
+    \node[anchor=north west,fill=#2,text=white,font=\scriptsize\bfseries,inner sep=2pt]
+      at ([xshift=2pt,yshift=-2pt]img.north west) {#3};
+    \node[anchor=north,font=\footnotesize,text=incgray,inner ysep=2pt,inner xsep=0pt,text width=#1,align=center]
+      at (img.south) {#4};
+  \end{tikzpicture}}
+% Regra do deck: o painel ANTES fica sempre à esquerda dos painéis DEPOIS.
+\newcommand{\antes}[3]{\painel{#1}{incgray}{ANTES}{#2}{#3}}
+\newcommand{\depois}[3]{\painel{#1}{incred}{DEPOIS}{#2}{#3}}
+% A frase que o público deve levar do slide.
+\newcommand{\mensagem}[1]{{\centering\large\textcolor{incred}{\textbf{#1}}\par}\vspace{0.25cm}}
+% Um número grande com a explicação embaixo. Vermelho para resultado bom; o opcional
+% cinza marca o número que ainda não é bom, para não ser lido como vitória.
+\newcommand{\numero}[3][incred]{%
+  \begin{beamercolorbox}[wd=\linewidth,sep=6pt,center]{block body}
+    {\Huge\bfseries\textcolor{#1}{#2}}\\[4pt]
+    {\small #3}
+  \end{beamercolorbox}}
+
+\title{Imagens sintéticas de ECG mais realistas}
+\subtitle{O que mudou no gerador de imagens e no leitor de ECG}
+\author{Jorge Amaral, Luan Rodrigues e Matheus Morata}
+\institute{Instituto Nacional de Cardiologia}
+\date{5 de outubro de 2026}
+\titlegraphic{\hfill\includegraphics[height=1.25cm]{logo_inc.jpg}}
+
+\begin{document}
+
+% ---------------------------------------------------------------------------------------
+\maketitle
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{Por que gerar imagens de ECG?}
+  \mensagem{Objetivo: ensinar um programa a ler ECGs em papel e em fotos}
+  \centering
+  \antes{0.3\textwidth}{gerador original}{final_upstream_1}\hspace{0.8cm}
+  \depois{0.3\textwidth}{gerador atual}{final_producao_1}
+
+  \vspace{0.1cm}
+  \raggedright
+  \begin{itemize}
+    \item O programa precisa de \textbf{milhares de exemplos com a resposta certa}
+    \item Criamos esses exemplos a partir de exames reais, e eles precisam parecer fotos
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{Como montamos uma foto de ECG}
+  \mensagem{Imitamos, passo a passo, o caminho de uma foto real}
+  \centering
+  \begin{tikzpicture}[
+      etapa/.style={draw=incgray!40,fill=incpaper,rounded corners=3pt,align=center,
+                    font=\small,inner sep=4pt,minimum height=1.5cm,text width=1.85cm},
+      num/.style={circle,fill=incred,text=white,font=\footnotesize\bfseries,inner sep=1.5pt},
+      arr/.style={-{Stealth[length=5pt]},incred,thick}]
+    \node[etapa] (s1) {\textbf{Impressão}\\[1pt]{\footnotesize traçado e folha}};
+    \node[etapa,right=0.32cm of s1] (s2) {\textbf{Papel}\\[1pt]{\footnotesize dobras e sombras}};
+    \node[etapa,right=0.32cm of s2] (s3) {\textbf{Câmera}\\[1pt]{\footnotesize foco}};
+    \node[etapa,right=0.32cm of s3] (s4) {\textbf{Ambiente}\\[1pt]{\footnotesize luz}};
+    \node[etapa,right=0.32cm of s4] (s5) {\textbf{Foto}\\[1pt]{\footnotesize brilho e cores}};
+    \node[etapa,right=0.32cm of s5] (s6) {\textbf{Sensor}\\[1pt]{\footnotesize nitidez e granulação}};
+    \foreach \i/\j in {1/2,2/3,3/4,4/5,5/6} \draw[arr] (s\i) -- (s\j);
+    \foreach \i in {1,...,6} \node[num] at (s\i.north west) {\i};
+  \end{tikzpicture}
+
+  \vspace{0.45cm}
+  \begin{columns}[T]
+    \begin{column}{0.6\textwidth}
+      \begin{block}{Como ler os próximos slides}
+        \textbf{ANTES} (à esquerda): sem a melhoria.\\
+        \textbf{DEPOIS}: a mesma folha com a melhoria.\\[2pt]
+        Na comparação, \textbf{só muda o efeito do slide}.\\[2pt]
+        {\footnotesize Alguns efeitos aparecem acentuados para ficarem visíveis no slide.}
+      \end{block}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{1 · O traçado impresso}
+  \mensagem{Impressoras reais não desenham uma linha perfeita}
+  \centering
+  \antes{0.31\textwidth}{linha perfeita e uniforme}{a_traco_antes}\hfill
+  \depois{0.31\textwidth}{espessura varia ao longo da linha}{a_traco_espessura}\hfill
+  \depois{0.31\textwidth}{com falhas de tinta}{a_traco_falhas}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item A espessura muda como a pressão de uma caneta
+    \item A tinta falha em alguns trechos: às vezes some, às vezes só fica mais clara
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{1 · A organização da folha}
+  \mensagem{Aparelhos diferentes organizam a folha de formas diferentes}
+  \centering
+  \antes{0.46\textwidth}{marca preta entre colunas}{a_layout_antes}\hfill
+  \depois{0.46\textwidth}{espaço entre colunas, nome afastado}{a_layout_depois}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item O espaço entre as colunas de derivações varia de folha para folha
+    \item O nome da derivação (aVR, V1\dots) fica mais perto ou mais longe do traçado
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{2 · O papel}
+  \mensagem{Papel de verdade é manuseado: dobra, amassa e faz sombra}
+  \centering
+  \antes{0.46\textwidth}{papel perfeitamente plano}{b_amassado_antes}\hfill
+  \depois{0.46\textwidth}{papel amassado}{b_amassado_depois}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item As dobras entortam a grade milimetrada e criam sombras
+    \item As sombras respeitam a direção de onde vem a luz, como numa foto real
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{3 · O foco da câmera}
+  \mensagem{Fotos de celular raramente têm foco perfeito}
+  \centering
+  \antes{0.46\textwidth}{foco perfeito, artificial}{c_blur_antes}\hfill
+  \depois{0.46\textwidth}{foco levemente suave}{c_blur_depois}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item Um desfoque leve suaviza as bordas sem apagar o traçado
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{4 · A luz do ambiente}
+  \mensagem{A luz de uma sala nunca é igual em toda a folha}
+  \centering
+  \antes{0.31\textwidth}{luz uniforme}{d_luz_antes}\hfill
+  \depois{0.31\textwidth}{luz vindo de um lado}{d_luz_iluminacao}\hfill
+  \depois{0.31\textwidth}{cantos mais escuros}{d_luz_vinheta}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item Uma janela ou lâmpada deixa um lado da folha mais claro que o outro
+    \item A lente da câmera escurece levemente os cantos da foto
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{5 · O brilho da foto}
+  \mensagem{Cada foto sai um pouco mais clara ou mais escura}
+  \centering
+  \antes{0.31\textwidth}{original}{d_exp_100}\hfill
+  \depois{0.31\textwidth}{mais escura}{d_exp_050}\hfill
+  \depois{0.31\textwidth}{mais clara}{d_exp_115}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item Limitamos o quanto a foto pode clarear: em excesso, a \textbf{grade milimetrada some
+          antes do traçado}, e sem a grade não é possível medir o exame
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{5 · A cor da luz}
+  \mensagem{A cor da luz agora varia como na vida real}
+  \centering
+  \antes{0.23\textwidth}{gerador antigo: laranja forte}{d_temp_2778}\hfill
+  \antes{0.23\textwidth}{gerador antigo: azul forte}{d_temp_19560}\hfill
+  \depois{0.23\textwidth}{agora: luz mais fria}{d_wb_frio}\hfill
+  \depois{0.23\textwidth}{agora: luz mais quente}{d_wb_quente}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item O gerador antigo sorteava entre laranja forte e azul forte, sem meio-termo
+    \item Agora a cor segue a luz natural, de levemente fria a levemente quente
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{5 · Contraste e cores}
+  \mensagem{Câmeras diferentes registram contraste e cores de formas diferentes}
+  \centering
+  \antes{0.25\textwidth}{original}{d_tom_antes}\hspace{0.3cm}
+  \depois{0.25\textwidth}{contraste baixo}{d_tom_c075}\hspace{0.3cm}
+  \depois{0.25\textwidth}{contraste alto}{d_tom_c135}
+
+  \vspace{0.1cm}
+  \antes{0.25\textwidth}{original}{d_cor_antes}\hspace{0.3cm}
+  \depois{0.25\textwidth}{cores desbotadas}{d_cor_s050}\hspace{0.3cm}
+  \depois{0.25\textwidth}{cores intensas}{d_cor_s150}
+
+  \vspace{0.15cm}
+  {\footnotesize Também variamos levemente o tom das cores e o quanto as áreas muito claras ou muito escuras perdem detalhe.}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{6 · A nitidez}
+  \mensagem{Linhas finas precisam aparecer como numa câmera, sem serrilhado}
+  \centering
+  \antes{0.38\textwidth}{baixa resolução: grade falhada}{e_ss1}\hspace{0.6cm}
+  \depois{0.38\textwidth}{mais detalhe, depois reduzida}{e_ss2}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item A imagem é desenhada com mais detalhe e depois reduzida, como faz o sensor de uma câmera
+    \item As linhas finas da grade ficam contínuas, sem falhas nem serrilhado
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{6 · A granulação da câmera}
+  \mensagem{Toda foto tem uma leve granulação, mas sutil}
+  \centering
+  \antes{0.34\textwidth}{gerador antigo: chuvisco forte}{e_ruido_imgaug}\hspace{0.8cm}
+  \depois{0.34\textwidth}{agora: granulação sutil}{e_ruido_sensor}
+
+  \vspace{0.3cm}
+  \raggedright
+  \begin{itemize}
+    \item O chuvisco antigo era mais forte que o da foto mais ruidosa entre as 8.793 fotos reais
+    \item Agora a granulação fica dentro do que se vê nas fotos reais
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{7 · A ordem das derivações}
+  \mensagem{As derivações saem na mesma ordem do aparelho de ECG}
+  \centering
+  \antes{0.34\textwidth}{ordem fora do padrão}{f_ordem_antes}\hspace{1.2cm}
+  \depois{0.34\textwidth}{ordem clínica, em duas colunas}{f_ordem_depois}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item Geramos folhas com 4 colunas, 2 colunas ou uma derivação embaixo da outra
+    \item Assim o programa aprende a ordem que ele vai encontrar nos exames do INC
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{7 · O papel do INC}
+  \mensagem{Agora imitamos o papel e a grade dos exames do INC}
+  \centering
+  \antes{0.34\textwidth}{grade vermelha comum}{f_papel_antes}\hspace{1.2cm}
+  \depois{0.34\textwidth}{papel rosado do INC}{f_papel_depois}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item Medimos a cor da grade e do papel em exames reais do INC
+    \item O traçado também ficou mais fino e mais acinzentado, como na impressão real
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{7 · O nome da derivação}
+  \mensagem{O nome é impresso como a impressora térmica do aparelho imprime}
+  \centering
+  \antes{0.46\textwidth}{letra preta e grande}{f_nome_antes}\hfill
+  \depois{0.46\textwidth}{letra pequena, da cor do traçado}{f_nome_depois}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item Tamanho medido em exames reais: a letra tem de 2 a 2,4\,mm de altura
+    \item O nome fica acima, abaixo ou ao lado do traçado, conforme o aparelho
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{8 · Foto de celular ou imagem de scanner}
+  \mensagem{Parte dos exames do INC chega escaneada, não fotografada}
+  \centering
+  \antes{0.34\textwidth}{foto: papel amassado, luz irregular}{f_scan_antes}\hspace{1.2cm}
+  \depois{0.34\textwidth}{scanner: papel plano e claro}{f_scan_depois}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item No scanner o papel fica plano, sem sombra e quase sem granulação
+    \item Metade das imagens do novo lote tem esse aspecto
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{9 · Anotações à caneta}
+  \mensagem{Os exames voltam com nome, data e observações escritos à mão}
+  \centering
+  \antes{0.34\textwidth}{folha sem anotações}{f_caneta_antes}\hspace{1.2cm}
+  \depois{0.34\textwidth}{com anotações à caneta}{f_caneta_depois}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item Nome, data, hora, assinatura e observações curtas, de 5 a 15\,mm de altura
+    \item Algumas atravessam o traçado, como acontece no papel real
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{Aprendendo com exames reais do INC}
+  \mensagem{Ajustamos o gerador olhando os exames de verdade}
+  \begin{columns}[T]
+    \begin{column}{0.31\textwidth}
+      \numero{103}{exames reais do Cardio analisados}
+    \end{column}
+    \begin{column}{0.31\textwidth}
+      \numero{4}{tipos de folha: tira rosa, folha CLB, Cardioline e imagens de baixa resolução}
+    \end{column}
+    \begin{column}{0.31\textwidth}
+      \numero[incgray!70]{ainda não}{o novo lote ainda não foi gerado nem testado no leitor}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.45cm}
+  \begin{itemize}
+    \item A proporção de cada tipo de folha, de scanner e de anotação segue o que vimos nesses exames
+    \item Falta gerar o lote e medir se o leitor passa a errar menos
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{Cada imagem vem com a resposta certa}
+  \begin{columns}[T]
+    \begin{column}{0.4\textwidth}
+      \begin{itemize}
+        \item Para aprender, o programa precisa saber \textbf{exatamente onde está o traçado}
+        \item O gerador grava essa resposta junto com cada imagem
+        \item Ela continua correta mesmo com o papel amassado e a foto girada
+        \item Os pontos da grade permitem “desamassar” a foto digitalmente
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.58\textwidth}
+      \centering
+      \painel{0.88\textwidth}{incred}{RESPOSTA}{azul: traçado · verde: pontos da grade · vermelho: topo da folha}{anot_overlay}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{Resultado do gerador}
+  \begin{columns}[T]
+    \begin{column}{0.64\textwidth}
+      \centering
+      \antes{0.32\textwidth}{exame 1}{final_upstream_1}\hfill
+      \antes{0.32\textwidth}{exame 2}{final_upstream_2}\hfill
+      \antes{0.32\textwidth}{exame 3}{final_upstream_3}
+
+      \vspace{0.1cm}
+      \depois{0.32\textwidth}{exame 1}{final_producao_1}\hfill
+      \depois{0.32\textwidth}{exame 2}{final_producao_2}\hfill
+      \depois{0.32\textwidth}{exame 3}{final_producao_3}
+    \end{column}
+    \begin{column}{0.34\textwidth}
+      \textcolor{incred}{\textbf{Resumo}}
+      \begin{itemize}
+        \item 20 efeitos que imitam papel, luz, câmera e scanner
+        \item 4.000 imagens já geradas e um novo lote de 3.000 no estilo do INC, pronto para gerar
+        \item Cada uma com a resposta certa
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{Do papel ao sinal: como o programa lê o ECG}
+  \mensagem{As imagens do gerador ensinam cada etapa do leitor}
+  \centering
+  \begin{tikzpicture}[
+      etapa/.style={draw=incgray!40,fill=incpaper,rounded corners=3pt,align=center,
+                    font=\small,inner sep=4pt,minimum height=1.7cm,text width=2.2cm},
+      ponta/.style={etapa,fill=white,text width=1.6cm},
+      num/.style={circle,fill=incred,text=white,font=\footnotesize\bfseries,inner sep=1.5pt},
+      arr/.style={-{Stealth[length=5pt]},incred,thick}]
+    \node[ponta] (in) {\textbf{Foto}\\[1pt]{\footnotesize do exame}};
+    % Tracejado: etapa em desenvolvimento.
+    \node[etapa,dashed,draw=incred!70,right=0.35cm of in] (e1) {\textbf{Endireitar o papel}\\[1pt]{\footnotesize achar a grade}};
+    \node[etapa,dashed,draw=incred!70,right=0.35cm of e1] (e2) {\textbf{Achar cada derivação}\\[1pt]{\footnotesize I, II, V1\dots}};
+    \node[etapa,right=0.35cm of e2] (e3) {\textbf{Separar o traçado}\\[1pt]{\footnotesize da grade}};
+    \node[ponta,right=0.35cm of e3] (out) {\textbf{Sinal}\\[1pt]{\footnotesize em números}};
+    \draw[arr] (in) -- (e1); \draw[arr] (e1) -- (e2); \draw[arr] (e2) -- (e3); \draw[arr] (e3) -- (out);
+    \foreach \i in {1,2,3} \node[num] at (e\i.north west) {\i};
+    % Um só rótulo sobre as duas etapas: dois rótulos lado a lado se encostam.
+    \draw[incred!70,thick] ([yshift=0.4cm]e1.north west) -- ([yshift=0.4cm]e2.north east);
+    \path (e1.north east) -- (e2.north west)
+      node[midway,yshift=0.4cm,fill=white,inner xsep=4pt,font=\scriptsize\bfseries,text=incred] {EM DESENVOLVIMENTO};
+  \end{tikzpicture}
+
+  \vspace{0.5cm}
+  \raggedright
+  \begin{itemize}
+    \item As três etapas são programas que \textbf{aprendem com exemplos}, e os exemplos vêm do gerador
+    \item Nos próximos slides: \textbf{endireitar o papel} e \textbf{achar as derivações}
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{Endireitar o papel (em desenvolvimento)}
+  \mensagem{O programa encontra os cruzamentos da grade e os usa como régua}
+  \centering
+  \antes{0.31\textwidth}{foto do exame real}{dig_retif_antes}\hfill
+  \painel{0.31\textwidth}{incgray!60}{CRUZAMENTOS}{pontos encontrados na grade}{dig_retif_pontos}\hfill
+  \depois{0.31\textwidth}{papel endireitado}{dig_retif_depois}
+
+  \vspace{0.35cm}
+  \raggedright
+  \begin{itemize}
+    \item Aprendeu com as imagens sintéticas, que já trazem a posição de cada cruzamento
+    \item Com os cruzamentos, sabe quanto mede 1 mm na foto, o que é essencial para medir o exame
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{Endireitar o papel: primeiros resultados (em desenvolvimento)}
+  \mensagem{Quando aceita a imagem, a régua é precisa; mas ainda recusa muitas}
+  \begin{columns}[T]
+    \begin{column}{0.31\textwidth}
+      \numero{98\,\%}{de acerto na posição dos cruzamentos em imagens sintéticas}
+    \end{column}
+    \begin{column}{0.31\textwidth}
+      \numero{31 de 66}{exames reais do INC aceitos e endireitados}
+    \end{column}
+    \begin{column}{0.31\textwidth}
+      \numero[incgray!70]{+2 pontos}{no acerto das derivações quando o papel é endireitado (81\,\% contra 79\,\%)}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.45cm}
+  \begin{itemize}
+    \item Quando não tem certeza, o programa \textbf{recusa a imagem em vez de estragá-la}
+    \item Ainda em desenvolvimento: a melhora que traz para achar as derivações é pequena
+  \end{itemize}
+\end{frame}
+
+% ---------------------------------------------------------------------------------------
+\begin{frame}{Achar cada derivação}
+  \mensagem{O leitor de derivações melhorou muito nos exames reais do INC}
+  \begin{columns}[T]
+    \begin{column}{0.31\textwidth}
+      \numero[incgray!70]{23\,\%}{derivações com o nome certo: leitor anterior}
+    \end{column}
+    \begin{column}{0.31\textwidth}
+      \numero{83\,\%}{derivações com o nome certo: leitor atual}
+    \end{column}
+    \begin{column}{0.31\textwidth}
+      \numero[incgray!70]{66}{exames reais do INC, marcados à mão, usados na medida}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.45cm}
+  \begin{itemize}
+    \item Em 41\,\% das folhas o leitor acerta as 12 derivações; no leitor anterior, em nenhuma
+    \item Erra mais nas derivações aVR, II e aVL; é por isso que o gerador precisa ficar cada vez mais parecido com os exames reais
+  \end{itemize}
+\end{frame}
+
+\end{document}
