@@ -86,6 +86,55 @@ The basic mode of the tool creates ECG images without distortions. The mode of o
      python gen_ecg_images_from_data_batch.py -i <path_to_input_directory> -o <path_to_output_directory> -se 10 --lead_name_bbox --lead_bbox --random_add_header 0.8 --calibration_pulse 0.5 --store_config 1 --add_qr_code
      ```
 
+### Trace, layout and printed-name flags
+These flags change what is drawn on the page itself, before any camera or scan effect. All of them keep the upstream look at their defaults.
+
+- `--trace_thickness_mm`: Trace width in millimetres; default: None (the upstream width). `--trace_thickness_jitter` (default 0.15) modulates the width along the trace.
+- `--trace_dropout_rate`: Rate of stylus dropouts, stretches where the trace fades or breaks; default: 0 (none). `--trace_dropout_length_mm` (default 0.5) sets their typical length.
+- `--lead_name_gap_mm`: Gap between a lead's name and its baseline; default: None (the fixed upstream 7 mm). `--lead_name_gap_jitter_mm` (default 0) varies it per page.
+- `--column_gap_mm`: Blank space between grid columns, replacing the upstream black lead-separator tick; default: None (keeps the tick). `--column_gap_jitter_mm` (default 0) varies it per page.
+- `--store_gridpoints`: Store the pixel coordinates of the grid intersections in the JSON as `gridpoints`. Needs `--store_config`.
+
+### Camera and scan chain
+After the page is drawn, an optional chain of physical effects makes it look photographed or scanned. Every parameter is neutral at its default, and at the neutral value the stage does not touch the image, so a run with the defaults is the same image as before the stage existed. Each `*_jitter*` parameter draws a per-record variation around its base value, and the matching `--deterministic_*` flag fixes the value instead of drawing it. The stages run in this order:
+
+| Stage | Flags | Default (neutral) |
+| --- | --- | --- |
+| Paper crumple | `--crumple_amplitude`, `--crumple_scale_cm`, `--deterministic_crumple` | 0 (flat), 8 cm |
+| Defocus blur | `--blur_sigma`, `--deterministic_blur` | 0 |
+| Side light | `--illum_strength`, `--illum_azimuth_deg` (-1 draws the direction), `--deterministic_illum` | 0 |
+| Exposure (a gain in linear light) | `--exposure`, `--exposure_jitter_stops` | 1.0, 0 |
+| White balance | `--wb_r`, `--wb_b`, `--wb_mired_jitter` | 1.0, 1.0, 0 |
+| Vignette | `--vignette`, `--deterministic_vignette` | 0 |
+| Contrast (mean-preserving tone curve) | `--contrast`, `--contrast_jitter_log2` | 1.0, 0 |
+| Black and white points | `--black_point`, `--white_point`, `--deterministic_black_point`, `--deterministic_white_point` | 0, 1 |
+| Saturation (CIELAB chroma) | `--saturation`, `--saturation_jitter_log2` | 1.0, 0 |
+| Hue rotation (CIELAB a*/b* plane) | `--hue_rotation`, `--hue_rotation_jitter_deg` | 0, 0 |
+| Sensor sampling | `--supersample`, `--output_width`, `--output_height` | 1, 0, 0 |
+| Sensor noise | `--sensor_noise`, `--sensor_noise_jitter_log2` | 0, 0 |
+
+`--supersample N` renders the page at N times the output resolution and integrates it back down onto the sensor grid, which is how a camera sampling a printed trace behaves. The cost grows with the square of N (maximum 4), and so does the memory of the intermediate image, so a large N should be run with few workers. `--output_width` and `--output_height` set the delivered size and must keep the render's aspect ratio. The valid range of each parameter is checked when the run starts, and an out-of-range value is refused. The reasoning behind each stage, and the order they were added in, is in [the parameter roadmap](./documentation/ROTEIRO_PARAMETROS_ECG.md), which is written in Portuguese.
+
+## Running a batch from a YAML file
+For a large run, `run_batch_from_config.py` describes the whole batch in one reviewable file instead of a long command line:
+
+```bash
+python run_batch_from_config.py batch_ptbxl_inc_v2.yaml
+```
+
+The keys are the argparse destination names of `gen_ecg_images_from_data_batch.py` (`rotate`, not `-rot`), an unknown key is a hard error, and a key left out takes the tool's default. The runner adds what the command line cannot express:
+
+- `randomize:` draws a parameter per record instead of fixing it for the batch, with one entry per parameter: `choice`, `uniform`, `randint` or `loguniform`. For example `num_columns: {choice: [1, 2, 4]}`. A parameter cannot be both fixed and randomized.
+- `realism:` is the nested mapping for `--realism`, one entry per group.
+- `extends: <base.yaml>` lets a variant list only what it changes. Keys replace the base's, `randomize:` and `realism:` merge entry by entry, and an entry set to `null` removes the base's. The `batch_ptbxl_inc_exp_*.yaml` files are variants of `batch_ptbxl_inc_v2.yaml`.
+- Per-record seeding of `random`, `numpy` and `imgaug`, from the seed and the record name. A batch reproduces from its seed, and a resumed batch renders the same images as an uninterrupted one.
+- `max_workers` renders that many records at once in worker processes. The peak memory multiplies with the number of workers.
+- `skip_existing` (default 1) resumes a batch: a record is skipped only when all its frames are on disk and finished. With `--store_config 2` this is exact. With 1 it is partial, and with 0 only the existence of the PNG is checked, so delete the output directory instead of resuming.
+
+The output is flat: every PNG, JSON and WFDB copy lands directly in `output_directory`, so record names must be unique and the runner refuses duplicates. The corpus is sorted before it is cut, so `max_num_images` picks the same records on any machine.
+
+Run all of this with the Python 3.10 environment from the installation section. Python 3.12 does not install the requirements.
+
 ## Adding distortions to the synethic images
 - ### Text distortions
      Scanned ECG images often contain handwritten notes by physicians, sometimes overlapping the ECG traces. Our toolkit simulates this by using a dictionary of relevant keywords, which are randomly placed on the ECG images. We gathered medical texts related to ECG and cardiovascular diseases and employed Natural Language Processing (NLP) models to extract biomedical phrases and keywords. These were transformed into handwritten-style images using pretrained models and overlaid on the ECG images.
