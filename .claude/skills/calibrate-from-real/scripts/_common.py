@@ -150,7 +150,9 @@ def detect_leads(model, bgr):
     inference next to a training run brings both down.
     """
     use_digitizer_src()
-    from digitizer.digitizer import get_image_boxes
+    # NAO_LEADS = ("pulse", "rhythm"): best_v3.pt has a `rhythm` class that get_image_boxes keeps in
+    # its dict; counted as a lead it would inflate the proxy (13 boxes, its confidence in the mean).
+    from digitizer.digitizer import NAO_LEADS, get_image_boxes
     result = model.predict(bgr, device="cpu", verbose=False)[0]
     kept, _ = get_image_boxes(result, model)
     if result.obb is not None:
@@ -162,7 +164,7 @@ def detect_leads(model, bgr):
         confs = result.boxes.conf.cpu().numpy()
     out = {}
     for name, quad in kept.items():
-        if name == "pulse":
+        if name in NAO_LEADS:
             continue
         quad = np.asarray(quad, float)
         match = np.abs(corners.reshape(len(corners), -1) - quad.reshape(1, -1)).max(axis=1)
