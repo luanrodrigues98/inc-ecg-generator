@@ -1,0 +1,97 @@
+# PROPOSAL, not a result: ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_3, 2000 pages
+# drawn like appearance group 3 (KMeans k=7, frozen features_imagens.csv sha256 7bc4b0bd...) of
+# the digitizer's datasets/cardio_s3_cache. calibrate-from-real skill, 2026-11-04. Evidence:
+#     ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos-20261104/  (gaps.md, commands.md)
+#
+# GROUP 3 = LOW-RESOLUTION IMAGES (76-120 dpi of paper) WITH THE PAPER BLOWN OUT TO WHITE AND
+# THE GRID ALMOST GONE ("scanner app" look). 5 exams, all audited: 2 INC pink strips, 2 CLB
+# sheets, 1 unknown 6x2 device. Profile: paper 254/254/254, grid cover 0, colourfulness 2.4,
+# trace FWHM 0.40 mm (pixel-bound: 1 px is ~0.28 mm at 92 dpi). CONFIDENCE: LOW (n = 5, three
+# drawings inside; values read by eye and checked on the probe's contact sheet).
+# The detector does well on the INC/CLB pages here (4/5 with 12 leads); its failures are on the
+# 6x2 device. What separates this group from groups 0 and 6 is exposure and compression, not
+# the drawing.
+#
+# A GROUP recipe: a group is a selection of the lot, its shares do not apply to the archive.
+#
+# MIXED DEVICES, DRAWN INDEPENDENTLY. The pink strips (palette 7, left pulse) and the CLB sheets
+# (palette 9, no left pulse) are mixed through independent draws: about 40% of the CLB-palette
+# pages get a left pulse and about 60% of the pink-strip pages lose theirs - combinations no
+# printer makes. Accepted here because what defines this group is the capture (blown-out paper,
+# vanished grid, ~100 dpi), not the printer; a pure-device split would need one YAML per device.
+#
+# (a) what this file changes against the recipe: the resolution (the recipe draws 350-600 dpi;
+#     the profile says NOT COVERED) and the scan's tone curve, pushed to blow the paper out.
+#     CHECKED ON THE PROBE (4 pages at 84-115 dpi, against the 5 real pages): paper 254-255
+#     (real 254), grid cover 0 / 0 / 0.012 (real 0 / 0 / 0.002), colourfulness 3.8 (real 2.4),
+#     page tone covered. The vanished grid IS reachable this way: class (a), not (b).
+#     Trace 0.38-0.46 mm FWHM (real 0.25-0.49), paper noise 4-20 (real 3-12): close.
+# What the generator CANNOT draw of this group (class b):
+#   - the 6x2 device (84455418): no rhythm strip, DOTTED grid, a pulse at the end of every
+#     segment, names on the baseline - seen once, on the watch list;
+#   - the pink strip's and the CLB sheet's geometry, the CLB "CAL" pulse at the right end.
+extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
+
+output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_3
+
+# The user's decision (2026-11-04): 2000 pages for each group, one YAML each.
+max_num_images: 2000
+
+randomize:
+  # 3x4 + rhythm 4/5, 6x2 1/5 (the 6x2 device; the generator adds a rhythm strip it lacks).
+  num_columns:
+    choice: [4, 4, 4, 4, 2]
+  # Real p10 / median / p90: 76 / 92 / 120 dpi of paper (profile, grid scale).
+  resolution:
+    randint: [75, 120]
+  # Pages off the INC palettes (the 6x2 device): grey rules.
+  standard_grid_color:
+    choice: [6]
+
+# Name above the trace on the 4 pages of INC/CLB format; the 6x2's names sit on the baseline,
+# which a multi-column grid cannot draw.
+lead_name_position: 'above:1.0'
+
+# Pulse at the left on 2/5 (the pink strips); right end 2/5 (CLB, not drawable), at the end of
+# every segment 1/5 (not drawable).
+calibration_pulse: 0.4
+
+realism:
+  # 2 pink strips (palette 7), 2 CLB sheets (palette 9), 1 grey-ruled device (p 0.8).
+  inc_paper:
+    p: 0.8
+    palettes: [7, 9]
+  # Trace black 3/5, blue 2/5; thick or medium at this resolution: FWHM 0.25-0.49 mm, bounded by
+  # the pixel - draw 0.15-0.4 mm.
+  inc_trace:
+    p: 1.0
+    colors: ['#1a1a1a', '#2b2b2b', '#414141', '#1a3a8f', '#2451b0']
+    thickness_mm: [0.15, 0.4]
+  # Flat, cropped to the sheet, no perspective (app of scanner on 4/5): the scan chain, with the
+  # tone curve pushed - exposure above 1 and a white point below 1 clip the paper to 255 and
+  # wash out the pale rules; saturation low (colourfulness 2.4). Checked on the probe (header).
+  # noise 3: paper noise 3-12 levels (JPEG at this size).
+  scan_look:
+    p: 1.0
+    rotate: 1
+    blur_sigma: 0.6
+    exposure: [1.10, 1.30]
+    contrast: [1.0, 1.15]
+    white_point: [0.88, 0.95]
+    saturation: [0.2, 0.5]
+    noise: 3
+  # No pen notes on 0/5 (interval < 35%): some mass kept.
+  handwriting:
+    p: 0.1
+    n_notes: [1, 4]
+    writers: [1, 2]
+    kinds: {date: 0.25, time: 0.15, name: 0.25, signature: 0.15, note: 0.2}
+    regions: {header: 0.4, margin: 0.2, between_rows: 0.25, over_trace: 0.15}
+    ink: ['#1b2a7c', '#22349a', '#2a3a8c', '#1e2f6e', '#1c1c22', '#2a2a30']
+    opacity: [0.75, 0.95]
+    height_mm: [5.0, 15.0]
+    stroke_mm: [0.25, 0.5]
+    tilt_deg: 6.0
+    bias: [0.6, 1.5]
+    styles: [0, 1, 2, 3, 4, 5, 6, 7]
+    avoid_names: true

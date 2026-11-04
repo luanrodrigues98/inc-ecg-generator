@@ -1,0 +1,81 @@
+# PROPOSAL, not a result: ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_5, 2000 pages
+# drawn like appearance group 5 (KMeans k=7, frozen features_imagens.csv sha256 7bc4b0bd...) of
+# the digitizer's datasets/cardio_s3_cache. calibrate-from-real skill, 2026-11-04. Evidence:
+#     ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos-20261104/  (gaps.md, commands.md)
+#
+# GROUP 5 = THE CLB SHEET (CLB FIA++ N 25) WITH SATURATED, DENSE ORANGE-RED RULES, FLATBED SCAN
+# AT 600 dpi. 8 exams, all audited (no sample). The drawing is the pale CLB sheet's (group 2);
+# what sets the group apart is the printed grid: rules 252/150/114, grid cover 0.57 (0.44-0.72),
+# colourfulness 77 against 29 in group 2. Confidence: low-medium (n=8).
+# In distribution for the detector (best_v3: 12 leads on 8/8, proxy 0.93-0.97): NO CHANGE
+# PROPOSED to the recipe's options; this file pins the group's traits.
+#
+# A GROUP recipe: a group is a selection of the lot, its shares do not apply to the archive.
+#
+# What the generator CANNOT draw of this group (class b, known):
+#   - the exact paper/grid pair: palette 8's rules are right (252/156/112) but its salmon paper
+#     (250/206/188) is not - the real paper between the rules is near-white (245/230/232).
+#     Palette 8 is the closest at the detector's scale (page tone 254/204/185 in the 2026-10-04
+#     probe, real 247/200/190). The right pair is clb-orange-palette.md (2026-10-02 test);
+#   - the "CAL" pulse at the right end and the device text (8/8) - clb-right-cal-pulse.md;
+#   - the white backing band (8/8) and the sheet's geometry - page-geometry.md;
+#   - a rhythm strip in lead III (1/8, 1972e486): full_mode is one lead per batch.
+extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
+
+output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_5
+
+# The user's decision (2026-11-04): 2000 pages for each group, one YAML each.
+max_num_images: 2000
+
+randomize:
+  # 3x4 + rhythm on 8/8 (74-100%), the CLB's only format.
+  num_columns:
+    choice: [4]
+  # Resolution: real scans 600 dpi; the recipe's 350-600 kept (detector at 1440 px; RAM, disk).
+
+# Name above the trace on 8/8: the CLB prints it there.
+lead_name_position: 'above:1.0'
+
+# No pulse at the left: the CLB never prints one (0/8 here, 0 of the 36 CLB sheets of
+# 2026-10-04); its "CAL" pulse at the right end cannot be drawn.
+calibration_pulse: 0.0
+
+realism:
+  # Palette 8 for every page: see above. Probe (3 pages at 400 dpi, the only palette-8 pages ever
+  # measured): page tone 253/202/182 (real 247/200/190), colourfulness 82 (real 77), grid hue 18
+  # (real 17) - right at the detector's scale; paper between the rules 252/205/187 against real
+  # 245/230/232 and grid cover 1.0 against 0.57 - the salmon paper, the known gap.
+  inc_paper:
+    p: 1.0
+    palettes: [8]
+  # Trace: blue 4/8, black 4/8 (24-75% each) -> 1 : 1. Medium: real FWHM 0.23 / 0.25 / 0.26 mm
+  # -> draw 0.15-0.3 mm.
+  inc_trace:
+    p: 1.0
+    colors: ['#1a3a8f', '#2451b0', '#1a1a1a', '#2b2b2b']
+    thickness_mm: [0.15, 0.3]
+  # Flatbed scan on 8/8. Parameters as in the recipe.
+  scan_look:
+    p: 1.0
+    rotate: 1
+    blur_sigma: 0.6
+    exposure: [0.90, 1.02]
+    contrast: [0.97, 1.05]
+    white_point: [0.99, 1.0]
+    saturation: [0.9, 1.2]
+    noise: 2
+  # Pen notes on 5/8 (62%, 34-83%). Everything else as in the recipe.
+  handwriting:
+    p: 0.6
+    n_notes: [1, 4]
+    writers: [1, 2]
+    kinds: {date: 0.25, time: 0.15, name: 0.25, signature: 0.15, note: 0.2}
+    regions: {header: 0.4, margin: 0.2, between_rows: 0.25, over_trace: 0.15}
+    ink: ['#1b2a7c', '#22349a', '#2a3a8c', '#1e2f6e', '#1c1c22', '#2a2a30']
+    opacity: [0.75, 0.95]
+    height_mm: [5.0, 15.0]
+    stroke_mm: [0.25, 0.5]
+    tilt_deg: 6.0
+    bias: [0.6, 1.5]
+    styles: [0, 1, 2, 3, 4, 5, 6, 7]
+    avoid_names: true

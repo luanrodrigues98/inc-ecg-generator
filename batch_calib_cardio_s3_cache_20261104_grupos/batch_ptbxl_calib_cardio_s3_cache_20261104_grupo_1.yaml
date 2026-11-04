@@ -1,0 +1,92 @@
+# PROPOSAL, not a result: ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_1, 2000 pages
+# drawn like appearance group 1 (KMeans k=7, notebook analise_distribuicoes_imagens.ipynb,
+# frozen features_imagens.csv sha256 7bc4b0bd...) of the digitizer's datasets/cardio_s3_cache.
+# Written by the calibrate-from-real skill on 2026-11-04. Run report and evidence:
+#     ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos-20261104/  (gaps.md, commands.md)
+#
+# GROUP 1 = THE INC PINK STRIP, FLATBED SCAN AT 600 dpi. 50 exams (49 pink strips, 1 CLB sheet
+# that the clustering put here). Frequencies below: 20 control pages of the group (random,
+# seed 20261104 + the 2026-10-04 controls; 90% Wilson interval). Confidence: medium.
+#
+# This is a GROUP recipe: it pins the group's traits. A group is a selection of the lot, so
+# none of these shares is meant to move a probability of the general recipe.
+#
+# What the generator CANNOT draw of this group (class b, known since 2026-10-04, feature
+# requests in ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache-20261004/feature_requests/):
+#   - the strip's geometry: about 268 x 113 mm with 24 mm between rows; this file draws US
+#     letter (216 mm tall, ~36 mm between rows) - page-geometry.md. With best_v3 it costs
+#     (read off every exam's detections, not a sample): the III segment is also boxed as aVF on
+#     26 of the 49 pink strips, III is lost on 10/49, and the aVF box is the one kept on the III
+#     trace on 3/49 (a name swap the proxy does not see); none of this on the 41 exams of
+#     groups 2, 4 and 5 (~42 mm between rows);
+#   - punch holes over row 1 (8/20 control pages, 24-58%) and the rhythm row - punch-holes.md;
+#   - the printed "ID:" / "Nome:" labels (19/20), black timing marks along an edge (19/20), the
+#     long footer line, the thermal fading that follows the trace's slope.
+extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
+
+# A NEW directory: the runner writes flat.
+output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_1
+
+# The user's decision (2026-11-04): 2000 pages for each group, one YAML each.
+max_num_images: 2000
+
+randomize:
+  # Layout 3x4 + rhythm on 20/20 control pages (88-100%): it is the strip's printer format.
+  # A list of another length than the base's re-rolls every randomize: key sorting after
+  # num_columns - harmless in a new dataset.
+  num_columns:
+    choice: [4]
+  # Resolution: the real scans are 600 dpi; the recipe's 350-600 draw is kept, because the
+  # detector sees the page at 1440 px and pinning 600 dpi doubles the peak RAM (21.6 GB) and
+  # the disk. Profile at matched dpi: paper, grid, trace and skew covered.
+
+# Name above the trace on 20/20 control pages (88-100%) and 26/26 audited: the strip's printer
+# never prints it elsewhere, so the weight is pinned.
+lead_name_position: 'above:1.0'
+
+# Pulse at the left of every row on 19/20 (80-98%); the one page without it is the CLB sheet
+# that fell into this group.
+calibration_pulse: 0.95
+
+# A group listed under realism: is rebuilt from realism.py's DEFAULTS plus what is written, not
+# from the base file: every group below is written out whole. lead_name_print,
+# clinical_lead_order and lead_name_position are not listed and keep the base's entries.
+realism:
+  # Palette 7 = INC pink strip (grid 19/20 red-pink). Profile against palette-7 scan pages:
+  # paper 242/247/249 real vs 236/240/251, grid cover 0.35 vs 0.39 - covered.
+  inc_paper:
+    p: 1.0
+    palettes: [7]
+  # Trace: thin on 19/20; warm grey 11/20 (37-71%), black/dark grey 8/20 -> 6 warm : 4 dark.
+  # Width: real FWHM 0.13 / 0.16 / 0.21 mm (p10 / median / p90, n=50); on the synthetic pages
+  # FWHM runs ~1.1-1.3 x the drawn width above 0.1 mm, so draw 0.07-0.2 mm.
+  inc_trace:
+    p: 1.0
+    colors: ['#5d4b3c', '#6c574a', '#8c7369', '#b4968c', '#5d4b3c', '#6c574a', '#2b2b2b', '#414141', '#5c5c5c', '#2b2b2b']
+    thickness_mm: [0.07, 0.2]
+  # Flatbed scan on 20/20 (88-100%). Parameters as in the recipe (exposure [0.90, 1.02] put the
+  # strip's paper at 237/246/249 in the 2026-10-04 probe).
+  scan_look:
+    p: 1.0
+    rotate: 1
+    blur_sigma: 0.6
+    exposure: [0.90, 1.02]
+    contrast: [0.97, 1.05]
+    white_point: [0.99, 1.0]
+    saturation: [0.9, 1.2]
+    noise: 2
+  # Pen notes on 7/20 control pages (35%, 20-53%). Everything else as in the recipe.
+  handwriting:
+    p: 0.35
+    n_notes: [1, 4]
+    writers: [1, 2]
+    kinds: {date: 0.25, time: 0.15, name: 0.25, signature: 0.15, note: 0.2}
+    regions: {header: 0.4, margin: 0.2, between_rows: 0.25, over_trace: 0.15}
+    ink: ['#1b2a7c', '#22349a', '#2a3a8c', '#1e2f6e', '#1c1c22', '#2a2a30']
+    opacity: [0.75, 0.95]
+    height_mm: [5.0, 15.0]
+    stroke_mm: [0.25, 0.5]
+    tilt_deg: 6.0
+    bias: [0.6, 1.5]
+    styles: [0, 1, 2, 3, 4, 5, 6, 7]
+    avoid_names: true

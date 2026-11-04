@@ -1,0 +1,93 @@
+# PROPOSAL, not a result: ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_2, 2000 pages
+# drawn like appearance group 2 (KMeans k=7, frozen features_imagens.csv sha256 7bc4b0bd...) of
+# the digitizer's datasets/cardio_s3_cache. calibrate-from-real skill, 2026-11-04. Evidence:
+#     ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos-20261104/  (gaps.md, commands.md)
+#
+# GROUP 2 = THE PALE CLB SHEET (CLB FIA++ N 25), FLATBED SCAN AT 600 dpi, plus the Cardioline
+# ECG200S and one Bionet that the clustering put here for their pale, low-contrast look.
+# 32 exams: CLB 26, Cardioline 5, Bionet 1. Frequencies: 20 control pages (90% Wilson interval).
+# Confidence: medium for the CLB part. In distribution for the detector on the CLB pages
+# (best_v3: 0 leads lost on the 26 CLB exams): NO CHANGE PROPOSED to the recipe's options; this
+# file pins the group's CLB sheet. The probe (3 pages) was rendered BEFORE the pin, when 10% of
+# pages took a plain red grid: its palette-9 pages are what this file draws now.
+#
+# A GROUP recipe: a group is a selection of the lot, its shares do not apply to the archive.
+#
+# What the generator CANNOT draw of this group (class b, known since 2026-10-04, requests in
+# ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache-20261004/feature_requests/):
+#   - the CLB "CAL" pulse at the RIGHT end of rows 1-3 and "CLB FIA++ N 25" beside lead I
+#     (18/20, 73-96%) - clb-right-cal-pulse.md; this file draws no pulse on the CLB pages;
+#   - the white backing band above the grid, with punch holes, pen notes and stamps (18/20) -
+#     a parameter of page-geometry.md; the sheet's ~182 mm height and ~42 mm row pitch (US
+#     letter here);
+#   - the Cardioline format (2/20 control pages, 3-26%; 5 of the 32 exams; 6 of the group's 7 lost
+#     leads): small names hugging the baseline, a separate pulse on every row, 12x1 WITHOUT a
+#     rhythm strip - cardioline-format.md. NOT DRAWN by this file (see "PINNED" below), nor the
+#     Bionet 6x2 (1 exam);
+#   - rubber stamps (5/20) - ink-stamps-stickers.md (2026-10-02 test).
+extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
+
+output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_2
+
+# The user's decision (2026-11-04): 2000 pages for each group, one YAML each.
+max_num_images: 2000
+
+# PINNED TO THE CLB SHEET ONLY. The group mixes CLB (26 exams) with Cardioline (5) and Bionet (1),
+# but the generator draws every option independently: a 10% share of left pulses, of names
+# below and of plain white paper would NOT make 10% Cardioline pages - it would put a left
+# pulse on ~10% of CLB pages and a name below on another ~10%, which no CLB prints. And the
+# Cardioline cannot be drawn anyway (class b). So the Cardioline and the Bionet pages (6/32)
+# are NOT represented in this file.
+
+randomize:
+  # 3x4 + rhythm: every CLB page (the one 12x1 in the control sample is a Cardioline).
+  num_columns:
+    choice: [4]
+  # Resolution: real scans 600 dpi; the recipe's 350-600 is kept (the detector sees 1440 px;
+  # pinning 600 dpi doubles peak RAM and disk).
+
+# Name above the trace on every CLB page (18/18 CLB control pages).
+lead_name_position: 'above:1.0'
+
+# No pulse at the left: the CLB prints its "CAL" pulse at the right end, which the generator
+# cannot draw (left pulse on 0/18 CLB control pages; the 2/20 with one are the Cardioline).
+calibration_pulse: 0.0
+
+realism:
+  # Palette 9 = CLB near-white paper under salmon rules, every page. Profile against
+  # palette-9 pages: paper 246/242/243 real, tone 246/232/233, grid cover 0.37, colourfulness 29 -
+  # covered or at the edges.
+  inc_paper:
+    p: 1.0
+    palettes: [9]
+  # Trace: blue (the CLB pen) 16/18 CLB control pages, black 2/18 (and the 2 Cardioline) ->
+  # 4 blue : 1 black. Medium: real FWHM 0.24 / 0.27 / 0.33 mm -> draw 0.15-0.32 mm.
+  inc_trace:
+    p: 1.0
+    colors: ['#1a3a8f', '#2451b0', '#132968', '#1a3a8f', '#2b2b2b']
+    thickness_mm: [0.15, 0.32]
+  # Flatbed scan 20/20 (88-100%). Parameters as in the recipe.
+  scan_look:
+    p: 1.0
+    rotate: 1
+    blur_sigma: 0.6
+    exposure: [0.90, 1.02]
+    contrast: [0.97, 1.05]
+    white_point: [0.99, 1.0]
+    saturation: [0.9, 1.2]
+    noise: 2
+  # Pen notes 6/20 (30%, 16-48%). Everything else as in the recipe.
+  handwriting:
+    p: 0.3
+    n_notes: [1, 4]
+    writers: [1, 2]
+    kinds: {date: 0.25, time: 0.15, name: 0.25, signature: 0.15, note: 0.2}
+    regions: {header: 0.4, margin: 0.2, between_rows: 0.25, over_trace: 0.15}
+    ink: ['#1b2a7c', '#22349a', '#2a3a8c', '#1e2f6e', '#1c1c22', '#2a2a30']
+    opacity: [0.75, 0.95]
+    height_mm: [5.0, 15.0]
+    stroke_mm: [0.25, 0.5]
+    tilt_deg: 6.0
+    bias: [0.6, 1.5]
+    styles: [0, 1, 2, 3, 4, 5, 6, 7]
+    avoid_names: true

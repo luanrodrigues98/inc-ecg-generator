@@ -1,0 +1,106 @@
+# PROPOSAL, not a result: ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_0, 2000 pages
+# drawn like appearance group 0 (KMeans k=7, frozen features_imagens.csv sha256 7bc4b0bd...) of
+# the digitizer's datasets/cardio_s3_cache. calibrate-from-real skill, 2026-11-04. Evidence:
+#     ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos-20261104/  (gaps.md, commands.md)
+#
+# GROUP 0 = SHARP THICK BLACK INK: four low-resolution images (86-112 dpi of paper: an SE-300,
+# an unknown device with an "Equip/Veloc/Membr/Torax" footer, a photographed CLB sheet, a
+# whitened pink strip) and ONE 600 dpi scan of a Cardioline 12x1 (b1034fcf) that the clustering
+# put here for its dense black ink, not for its resolution. 5 exams, all audited.
+# CONFIDENCE: LOW (n = 5 and five different drawings; values read by eye and checked on the
+# probe's contact sheet). What separates the group is resolution, compression (JPEG blocks)
+# and ink weight, not one drawing.
+#
+# A GROUP recipe: a group is a selection of the lot, its shares do not apply to the archive.
+#
+# MIXED DEVICES, DRAWN INDEPENDENTLY. Palette, grid colour, layout, pulse and name position are
+# drawn separately, so the pages combine the five devices' traits freely (a CLB-palette page
+# with a left pulse, a 12x1 with a pink-strip palette): combinations no printer makes. Accepted
+# because the group is defined by resolution and ink, and each device was seen once.
+#
+# (a) what this file changes against the recipe: resolution (NOT COVERED by 350-600 dpi), a thick
+#     black trace, whitened paper, a mix of grid colours.
+# What the generator CANNOT draw of this group (class b) - and it is where the detector fails
+# (median proxy 0.72, 7 leads lost, all on the first two devices below):
+#   - the SE-300: 3x4 WITHOUT a rhythm strip, 15 mm between rows, names on the baseline
+#     (5477df4e: 6 leads, all misplaced) - watch list;
+#   - the unknown device: dotted faint grid, vertical separators between segments, pulse at the
+#     right end (f7ca59cf: I and II both boxed on row 1) - watch list;
+#   - the Cardioline 12x1 WITHOUT a rhythm strip, with a printed measurement block
+#     (b1034fcf; boxes spanning two to four rows) - cardioline-format.md;
+#   - JPEG blocks (no jpeg option yet), photo perspective and background.
+# The 600 dpi page is approximated by the low resolution like the rest: it is one page of five.
+extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
+
+output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_0
+
+# The user's decision (2026-11-04): 2000 pages for each group, one YAML each.
+max_num_images: 2000
+
+randomize:
+  # 3x4 + rhythm 3/5, 12x1 1/5, 3x4 without rhythm 1/5 (not drawable: drawn as 3x4 + rhythm).
+  num_columns:
+    choice: [4, 4, 4, 4, 1]
+  # 4 of the 5 pages at 86-112 dpi of paper (the fifth is the 600 dpi Cardioline).
+  resolution:
+    randint: [85, 115]
+  # Pages off the INC palettes: grey (SE-300, the whitened strip) 2 : red (Cardioline, unknown
+  # device) 2.
+  standard_grid_color:
+    choice: [6, 6, 5, 5]
+
+# Grid pages: name above on the 3 pages that print it there (the SE-300's sit on the baseline,
+# which a grid cannot draw). Single column: on the baseline (the Cardioline 12x1).
+lead_name_position: 'above:1.0'
+lead_name_position_single_column: 'level:1.0'
+
+# Pulse at the left on 3/5 (SE-300, pink strip, Cardioline), right end 2/5 (not drawable).
+calibration_pulse: 0.6
+
+# CHANGED AFTER THE PROBE, NOT VERIFIED (the run's 24-page probe budget was spent): the probe's
+# photo-chain pages (recipe's rotate 5, blur_sigma 1.5) came out tilted ~5 deg with black
+# corners and a blurred trace; the real pages tilt 0.5 / 0.9 / 1.6 deg (p10 / median / p90 of
+# |skew|) and are sharp (the cluster's strongest traits are sharpness and gradient).
+rotate: 2
+blur_sigma: 0.5
+
+realism:
+  # 1 CLB sheet (palette 9) and 1 pink strip (palette 7) of 5; the rest standard grids.
+  inc_paper:
+    p: 0.4
+    palettes: [7, 9]
+  # Black on 5/5, thick on 4/5: real FWHM 0.25 / 0.31 / 0.48 mm. CHANGED AFTER THE PROBE, NOT
+  # VERIFIED: drawing 0.25-0.5 mm measured 0.40 / 0.55 / 0.64 mm on the probe (n=4) - too thick
+  # at ~100 dpi, where a stroke cannot be thinner than a pixel; 0.15-0.35 mm should land near 0.3.
+  inc_trace:
+    p: 1.0
+    colors: ['#000000', '#161616', '#2b2b2b']
+    thickness_mm: [0.15, 0.35]
+  # 3 of 5 flat (2 scanner-app images, 1 scan), 2 photographed or unsure: p 0.6.
+  # CHANGED AFTER THE PROBE, NOT VERIFIED: exposure [1.0, 1.2] with white point [0.90, 0.97]
+  # blew the paper to 255/255/255 and the page tone to 254 (real paper 253, tone 245, n=5) and
+  # left colourfulness at 3.9 (real 7). Pulled back towards a near-white, not clipped, page.
+  scan_look:
+    p: 0.6
+    rotate: 1
+    blur_sigma: 0.6
+    exposure: [0.95, 1.08]
+    contrast: [1.0, 1.1]
+    white_point: [0.95, 1.0]
+    saturation: [0.6, 1.0]
+    noise: 3
+  # Pen notes on 2/5 (14-72%).
+  handwriting:
+    p: 0.4
+    n_notes: [1, 4]
+    writers: [1, 2]
+    kinds: {date: 0.25, time: 0.15, name: 0.25, signature: 0.15, note: 0.2}
+    regions: {header: 0.4, margin: 0.2, between_rows: 0.25, over_trace: 0.15}
+    ink: ['#1b2a7c', '#22349a', '#2a3a8c', '#1e2f6e', '#1c1c22', '#2a2a30']
+    opacity: [0.75, 0.95]
+    height_mm: [5.0, 15.0]
+    stroke_mm: [0.25, 0.5]
+    tilt_deg: 6.0
+    bias: [0.6, 1.5]
+    styles: [0, 1, 2, 3, 4, 5, 6, 7]
+    avoid_names: true

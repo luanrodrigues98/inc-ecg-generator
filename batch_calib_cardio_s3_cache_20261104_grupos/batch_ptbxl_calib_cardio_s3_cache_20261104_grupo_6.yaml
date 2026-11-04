@@ -1,0 +1,100 @@
+# PROPOSAL, not a result: ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_6, 2000 pages
+# drawn like appearance group 6 (KMeans k=7, frozen features_imagens.csv sha256 7bc4b0bd...) of
+# the digitizer's datasets/cardio_s3_cache. calibrate-from-real skill, 2026-11-04. Evidence:
+#     ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos-20261104/  (gaps.md, commands.md)
+#
+# GROUP 6 = ONE EXAM: a phone photograph of a CLB sheet (a60c7792), 1006 x 653 px (~90 dpi of
+# paper; the profile's grid scale is a harmonic, so this comes from the pixel width), DARK -
+# paper 199/199/195 -, grey-beige cast, a soft shadow in the middle, paper noise ~40 levels.
+# CONFIDENCE: MINIMAL (n = 1; every value below read off this one page, by eye on the probe).
+# best_v3: 11 leads, the V4 segment kept as "v1" (a name swap the proxy does not see).
+# What separates the group is the capture's exposure, not the drawing (the CLB sheet).
+#
+# (a) what this file changes against the recipe: resolution, the photo chain (scan_look off),
+#     a lower exposure and saturation.
+# What the generator CANNOT draw of this group (class b, known):
+#   - the "CAL" pulse at the right end and the device text - clb-right-cal-pulse.md;
+#   - the CLB sheet's geometry - page-geometry.md;
+#   - a cast off the daylight locus, if the probe shows the grey-beige is out of reach.
+extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
+
+output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_6
+
+# The user's decision (2026-11-04): 2000 pages for each group, one YAML each.
+max_num_images: 2000
+
+randomize:
+  num_columns:
+    choice: [4]
+  # ~90 dpi of paper (1006 px across a ~276 mm sheet).
+  resolution:
+    randint: [85, 100]
+  # The photo chain's brightness. CHANGED AFTER THE PROBE, NOT VERIFIED. With exposure
+  # [0.70, 0.85] the 4 probe pages measured paper 245 / 250 / 255 / 227 (real 199) - and the page
+  # with the LOWEST exposure (0.754) came out at 255, so exposure is not what set them. The
+  # draws that varied with it on those pages: white_point 0.97 / 0.92 / 0.91 / 0.94, contrast
+  # 1.10 / 0.90 / 0.95 / 0.86, illumination 0.16 / 0.15 / 0.14 / 0.39. Four pages do not
+  # separate them. A reading, not a measurement: exposure multiplies in LINEAR light
+  # (CameraPhotometry/photometry.py), so 0.8 is only ~0.9 in sRGB, and a white point below 1
+  # stretches the paper back up. The three coupled values are therefore changed together:
+  # exposure lower, white point and contrast held near neutral. A re-probe decides.
+  exposure:
+    uniform: [0.55, 0.68]
+  white_point:
+    uniform: [0.97, 1.0]
+  contrast:
+    uniform: [0.95, 1.05]
+  # Colourfulness 11 (group 2's pale CLB scans: 29): saturation down.
+  saturation:
+    uniform: [0.5, 0.8]
+
+lead_name_position: 'above:1.0'
+
+# No pulse at the left: the CLB never prints one.
+calibration_pulse: 0.0
+
+# CHANGED AFTER THE PROBE, NOT VERIFIED (the run's 24-page probe budget was spent): on the
+# 4-page probe (recipe's blur_sigma 1.5, rotate 5, trace 0.15-0.3 mm) the trace all but vanished
+# and the grid was gone - per-page blur of 0.76-1.4 px at 86-94 dpi over a trace of ~1 px. The
+# real photo has a dark, clear trace and visible rules, and is tilted 0.6 deg. Hence a lighter
+# blur, a smaller tilt and a thicker trace (below). A re-probe is the check (commands.md).
+blur_sigma: 0.5
+rotate: 2
+
+realism:
+  # Palette 9 (CLB, grid 151/132/109 under the cast).
+  inc_paper:
+    p: 1.0
+    palettes: [9]
+  # Blue pen trace. 0.3-0.5 mm (CHANGED AFTER THE PROBE, see above): at ~90 dpi 1 px is ~0.28 mm.
+  inc_trace:
+    p: 1.0
+    colors: ['#1a3a8f', '#2451b0', '#132968']
+    thickness_mm: [0.3, 0.5]
+  # A phone photo, not a scan: the scan chain is off (p 0) and the recipe's photo chain draws
+  # perspective-free rotation, crumple, side light, vignette and noise. The other parameters
+  # are written out so the group is complete; they are unused at p 0.
+  scan_look:
+    p: 0.0
+    rotate: 1
+    blur_sigma: 0.6
+    exposure: [0.90, 1.02]
+    contrast: [0.97, 1.05]
+    white_point: [0.99, 1.0]
+    saturation: [0.9, 1.2]
+    noise: 2
+  # One page without pen notes cannot give a share: the CLB share of group 2 (6/20).
+  handwriting:
+    p: 0.3
+    n_notes: [1, 4]
+    writers: [1, 2]
+    kinds: {date: 0.25, time: 0.15, name: 0.25, signature: 0.15, note: 0.2}
+    regions: {header: 0.4, margin: 0.2, between_rows: 0.25, over_trace: 0.15}
+    ink: ['#1b2a7c', '#22349a', '#2a3a8c', '#1e2f6e', '#1c1c22', '#2a2a30']
+    opacity: [0.75, 0.95]
+    height_mm: [5.0, 15.0]
+    stroke_mm: [0.25, 0.5]
+    tilt_deg: 6.0
+    bias: [0.6, 1.5]
+    styles: [0, 1, 2, 3, 4, 5, 6, 7]
+    avoid_names: true

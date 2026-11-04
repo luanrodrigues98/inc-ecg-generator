@@ -1,0 +1,74 @@
+# PROPOSAL, not a result: ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_4, 2000 pages
+# drawn like appearance group 4 (KMeans k=7, frozen features_imagens.csv sha256 7bc4b0bd...) of
+# the digitizer's datasets/cardio_s3_cache. calibrate-from-real skill, 2026-11-04. Evidence:
+#     ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos-20261104/  (gaps.md, commands.md)
+#
+# GROUP 4 = ONE EXAM: a pale CLB sheet (CLB FIA++ N 25) scanned at 600 and at 300 dpi
+# (80374a38, d8bb32e7 - counted once) lying on a BROWN SURFACE that fills the frame around it.
+# CONFIDENCE: MINIMAL (n = 1). The drawing is the ordinary CLB sheet of group 2 (best_v3: 12/12,
+# proxy 0.97); what sets the group apart is only the capture - the brown surround and a paper a
+# little darker than group 2's (237/232/229 against 246/242/243). NO CHANGE PROPOSED to the
+# recipe's options. Every value below is group 2's CLB value or read off this one page.
+#
+# What the generator CANNOT draw of this group (class b, known):
+#   - the surface around the sheet (the very trait that defines the group): background_* is
+#     deferred in the generator's roadmap; "surface around the sheet" is on the 2026-10-04 watch
+#     list - THIS FILE DRAWS THE SHEET ONLY;
+#   - the "CAL" pulse at the right end and the device text - clb-right-cal-pulse.md;
+#   - the white backing band and the sheet's geometry - page-geometry.md.
+extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
+
+output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_4
+
+# The user's decision (2026-11-04): 2000 pages for each group, one YAML each.
+max_num_images: 2000
+
+randomize:
+  # 3x4 + rhythm (the CLB's only format).
+  num_columns:
+    choice: [4]
+  # Resolution: the kept scan is 600 dpi (its repeat 300 dpi); the recipe's 350-600 is kept.
+
+# Name above the trace (the CLB's).
+lead_name_position: 'above:1.0'
+
+# No pulse at the left: the CLB never prints one.
+calibration_pulse: 0.0
+
+realism:
+  # Palette 9: grid 236/190/167 on this page, as group 2's pale sheets (248/203/182).
+  inc_paper:
+    p: 1.0
+    palettes: [9]
+  # Blue pen trace, medium (FWHM 0.31 mm on this page) -> 0.15-0.32 mm as group 2.
+  inc_trace:
+    p: 1.0
+    colors: ['#1a3a8f', '#2451b0', '#132968']
+    thickness_mm: [0.15, 0.32]
+  # Flatbed scan. exposure [0.85, 0.97] (v2's range, which put white paper at 232-241) instead
+  # of the recipe's [0.90, 1.02]: this page's paper is 237/232/229, darker than group 2's.
+  scan_look:
+    p: 1.0
+    rotate: 1
+    blur_sigma: 0.6
+    exposure: [0.85, 0.97]
+    contrast: [0.97, 1.05]
+    white_point: [0.99, 1.0]
+    saturation: [0.9, 1.2]
+    noise: 2
+  # The page carries faint pencil writing on its band; group 2's CLB share of pen notes (6/20)
+  # is used, since one page cannot give a share.
+  handwriting:
+    p: 0.3
+    n_notes: [1, 4]
+    writers: [1, 2]
+    kinds: {date: 0.25, time: 0.15, name: 0.25, signature: 0.15, note: 0.2}
+    regions: {header: 0.4, margin: 0.2, between_rows: 0.25, over_trace: 0.15}
+    ink: ['#1b2a7c', '#22349a', '#2a3a8c', '#1e2f6e', '#1c1c22', '#2a2a30']
+    opacity: [0.75, 0.95]
+    height_mm: [5.0, 15.0]
+    stroke_mm: [0.25, 0.5]
+    tilt_deg: 6.0
+    bias: [0.6, 1.5]
+    styles: [0, 1, 2, 3, 4, 5, 6, 7]
+    avoid_names: true
