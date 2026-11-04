@@ -194,6 +194,31 @@ def validate_randomize(randomize, known, static_keys, config_path):
             raise SystemExit("%s: randomize: %s.choice is empty" % (config_path, key))
 
 
+def parse_only_records(value, config_path):
+    """only_records: a list of record names, or the path of a file with one name per line.
+
+    Restricts the batch to those records - the regeneration recipe uses it to render again a
+    page whose local copy was deleted after the upload. A path resolves against the generator
+    root like every other path in the YAML; blank lines and lines starting with # are skipped.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        if not os.path.isfile(value):
+            raise SystemExit("%s: only_records names a file that does not exist: %s"
+                             % (config_path, value))
+        with open(value) as handle:
+            value = [line.strip() for line in handle
+                     if line.strip() and not line.lstrip().startswith('#')]
+    if (not isinstance(value, list) or not value
+            or not all(isinstance(name, str) and name for name in value)):
+        raise SystemExit(
+            "%s: only_records must be a non-empty list of record names, e.g. [00001_lr], "
+            "or the path of a file with one name per line. Names are QUOTED in YAML when "
+            "they could read as numbers." % config_path)
+    return list(value)
+
+
 def build_args(config, config_path):
     """Overlay a config dict onto the batch parser's own namespace.
 
@@ -204,6 +229,9 @@ def build_args(config, config_path):
     args = get_parser().parse_args(['-i', '', '-o', ''])
     known = set(vars(args))
     randomize = config.pop('randomize', None) or {}
+    #only_records is the runner's own key, not an argparse destination, so it leaves the dict
+    #before the unknown-key check and travels on the namespace under the same name.
+    args.only_records = parse_only_records(config.pop('only_records', None), config_path)
 
     #Reject unknown keys rather than ignoring them. A parameter that parses and does
     #nothing is the failure mode this codebase already suffers from with
@@ -752,13 +780,12 @@ def seed_everything(seed):
     np.random.seed(entropy)
 
 
-def render_record(args, randomize, record, input_directory, output_root):
-    """Render one record and return the number of frames written.
+def record_args(args, randomize, record, input_directory, output_root):
+    """The namespace one record renders with: the batch's, plus its files and its draws.
 
-    The unit of work handed to the joblib workers, and what max_workers 1 runs in the
-    runner's own process. Everything a record's images depend on is derived here from
-    (seed, record name) alone, so they do not depend on which worker takes the record, in
-    what order, or which records before it were skipped as already finished.
+    A pure function of (args, randomize, record), so the runner's own process can compute
+    exactly what a worker rendered with - the S3 manifest records the draws this returns
+    without anything being shipped back from the joblib workers.
     """
     header_file, recording_file, name = record
     #A copy, so the keys set per record cannot leak into the next record a worker takes.
@@ -774,14 +801,34 @@ def render_record(args, randomize, record, input_directory, output_root):
     rng = random.Random('%s:%s' % (args.seed, args.encoding))
     for key, spec in sorted(randomize.items()):
         setattr(args, key, draw(spec, rng))
+    return args
+
+
+def chain_seed(seed, name):
+    """The seed every global RNG restarts from before a record renders.
+
+    The ':chain' suffix keeps this stream apart from the randomize stream in record_args,
+    which is keyed by the same pair.
+    """
+    return zlib.crc32(('%s:%s:chain' % (seed, name)).encode('utf-8'))
+
+
+def render_record(args, randomize, record, input_directory, output_root):
+    """Render one record and return the number of frames written.
+
+    The unit of work handed to the joblib workers, and what max_workers 1 runs in the
+    runner's own process. Everything a record's images depend on is derived here from
+    (seed, record name) alone, so they do not depend on which worker takes the record, in
+    what order, or which records before it were skipped as already finished.
+    """
+    args = record_args(args, randomize, record, input_directory, output_root)
 
     #Restart every global RNG run_single_file draws from - the font, the crumple, blur and
     #illumination amplitudes, the white balance, the augment noise, rotation and crop, the
     #bernoulli switches and imgaug's own noise. Seeded ONCE per batch, those draws depended
     #on how many draws the records before had consumed, so a resume changed the images after
-    #it and no two worker schedules would agree. The ':chain' suffix keeps this stream apart
-    #from the randomize stream above, which is keyed by the same pair.
-    seed_everything(zlib.crc32(('%s:%s:chain' % (args.seed, name)).encode('utf-8')))
+    #it and no two worker schedules would agree.
+    seed_everything(chain_seed(args.seed, record[2]))
 
     return run_single_file(args)
 
@@ -879,6 +926,15 @@ def main():
         records.append((header_file, recording_file, name))
     duplicates = len(pairs) - len(records)
     print("records          : %d unique (%d duplicate name(s) skipped)" % (len(records), duplicates))
+
+    if args.only_records is not None:
+        wanted = set(args.only_records)
+        unknown = sorted(wanted - {record[2] for record in records})
+        if unknown:
+            raise SystemExit("only_records: %d name(s) not in the corpus: %s"
+                             % (len(unknown), ', '.join(unknown[:10])))
+        records = [record for record in records if record[2] in wanted]
+        print("only_records     : %d record(s)" % len(records))
     sys.stdout.flush()
 
     #max_num_images caps FRAMES, not records: run_single_file returns the number of frames it
