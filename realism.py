@@ -39,6 +39,11 @@
 #                        over_trace - the only one that crosses a trace). `avoid_names` keeps
 #                        the ink off the printed lead names. Each note's box goes in the JSON
 #                        as handwriting: [...]. Off writes nothing.
+#  inc_grid            - grid rules as thick as a scanned printout's: the 5 mm (major) rule
+#                        log-uniform over `major_mm`, the 1 mm (minor) rule that width times a
+#                        ratio drawn in `minor_ratio`, in every grid style (bw included). The
+#                        widths drawn go in the JSON as grid_line_width_mm: {major, minor}. Off
+#                        keeps the upstream 0.5 pt (0.176 mm) for both.
 #
 #A group absent from the block is not drawn and keeps the behaviour the rest of the
 #configuration gives it; the JSON then carries no entry for it.
@@ -61,7 +66,7 @@ FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'Fonts')
 #Order is load bearing: every group spends one draw in this order, so a new group goes at
 #the END, or every existing flag of a batch changes.
 GROUPS = ('clinical_lead_order', 'lead_name_position', 'inc_paper', 'inc_trace', 'lead_name_print',
-          'scan_look', 'handwriting')
+          'scan_look', 'handwriting', 'inc_grid')
 
 #Parameters a group takes besides p, with their defaults - measured on the Cardio scans
 #(2026-09-24) where a number is involved.
@@ -96,6 +101,13 @@ DEFAULTS = {
                     'opacity': [0.75, 0.95], 'height_mm': [5.0, 15.0], 'stroke_mm': [0.25, 0.5],
                     'tilt_deg': 6.0, 'bias': [0.6, 1.5], 'styles': [0, 1, 2, 3, 4, 5, 6, 7],
                     'avoid_names': True},
+    #Measured 2026-11-05 on the digitizer's 400 dpi page (FWHM of the horizontal rules, px):
+    #the upstream 0.5 pt rule reads 3 px on every synthetic page, both rules, while the
+    #scans read 3/4/4/6/7 (p10/25/50/75/90) on the 5 mm rule and 2/3/3/4/6.5 on the 1 mm one,
+    #minor/major ratio median 0.75 - 1698 leads of the INC's dataset_label and Cardio scans.
+    #A starting range, to be checked against that through the whole chain (render,
+    #supersample, blur, the digitizer's resample) before a dataset is built on it.
+    'inc_grid': {'major_mm': [0.15, 0.55], 'minor_ratio': [0.5, 1.0]},
 }
 
 
@@ -170,6 +182,9 @@ def parse_realism(spec):
                                  % (out['blur_sigma'],))
         if group == 'handwriting':
             _parse_handwriting(out)
+        if group == 'inc_grid':
+            out['major_mm'] = _range(group, 'major_mm', out['major_mm'], 0.02, 2.0)
+            out['minor_ratio'] = _range(group, 'minor_ratio', out['minor_ratio'], 0.1, 2.0)
         parsed[group] = out
     return parsed or None
 

@@ -586,8 +586,9 @@ def ecg_plot(
 
     #Realism groups (realism.py): extract_leads drew them for the record. A group missing from
     #realism_flags was not configured and keeps the behaviour the other parameters give it.
-    #The groups that pick a value here do it on streams of their own (tags 20, 21), so they
-    #never shift the global random draws the colour branch below makes.
+    #The groups that pick a value here do it on streams of their own (tags 20, 21, 26), so
+    #they never shift the global random draws the colour branch below makes. (23-25 are the
+    #handwriting's, on the same key.)
     realism_flags = realism_flags or {}
     if realism_flags.get('inc_paper') and style != 'bw':
         palettes = realism['inc_paper']['palettes']
@@ -599,6 +600,20 @@ def ecg_plot(
         trace_rng = np.random.default_rng([abs(seed), abs(start_index), record_key, 21])
         trace_color = colours[int(trace_rng.integers(len(colours)))]
         trace_thickness_mm = float(np.exp(trace_rng.uniform(np.log(thin_low), np.log(thin_high))))
+    #Grid rule widths in points. Locals, never written back to standard_values: one process
+    #renders many records, and a width left behind would leak into the next one. Off, both
+    #rules keep the upstream grid_line_width. Drawn in every style - bw pages are photocopies,
+    #and those are where the scanned rules run thickest.
+    grid_major_width = grid_minor_width = grid_line_width
+    grid_width_mm = None
+    if realism_flags.get('inc_grid'):
+        major_low, major_high = realism['inc_grid']['major_mm']
+        grid_rng = np.random.default_rng([abs(seed), abs(start_index), record_key, 26])
+        major_mm = float(np.exp(grid_rng.uniform(np.log(major_low), np.log(major_high))))
+        minor_mm = major_mm*float(grid_rng.uniform(*realism['inc_grid']['minor_ratio']))
+        grid_major_width = major_mm*72.0/25.4
+        grid_minor_width = minor_mm*72.0/25.4
+        grid_width_mm = {'major': round(major_mm, 4), 'minor': round(minor_mm, 4)}
 
     #Mark grid based on whether we want black and white or colour
     paper_color = None
@@ -1165,9 +1180,9 @@ def ecg_plot(
         ax.xaxis.set_minor_locator(AutoMinorLocator(5))
 
         #set grid line style
-        ax.grid(which='major', linestyle='-', linewidth=grid_line_width, color=color_major)
-        
-        ax.grid(which='minor', linestyle='-', linewidth=grid_line_width, color=color_minor)
+        ax.grid(which='major', linestyle='-', linewidth=grid_major_width, color=color_major)
+
+        ax.grid(which='minor', linestyle='-', linewidth=grid_minor_width, color=color_minor)
         
         if store_configs == 2:
             json_dict['grid_line_color_major'] = [round(x*255., 2) for x in color_major]
@@ -1200,6 +1215,8 @@ def ecg_plot(
             json_dict['realism'] = dict(realism_flags)
             if realism_flags.get('inc_paper') and style != 'bw':
                 json_dict['grid_palette'] = standard_colours
+            if grid_width_mm is not None:
+                json_dict['grid_line_width_mm'] = grid_width_mm
             if printed_style is not None:
                 json_dict['lead_name_print'] = printed_style
 
