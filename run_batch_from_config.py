@@ -28,9 +28,15 @@
 #    the base's, randomize: and realism: merge entry by entry, and an entry set to null
 #    removes the base's. batch_ptbxl_inc_exp_*.yaml are variants of batch_ptbxl_inc_v2.yaml.
 #
+#  - --s3-prefix s3://bucket/prefix, which uploads each lot of finished records to S3 while
+#    the batch renders and deletes uploaded local copies when the disk runs low, keeping a
+#    ledger for the resume and a manifest for regenerating any page (s3_upload.py, README).
+#
 #Usage:
 #    .venv310/bin/python run_batch_from_config.py batch_ptbxl_3000.yaml
+#    .venv310/bin/python run_batch_from_config.py batch.yaml --s3-prefix s3://bucket/prefix
 import os, sys, copy, glob, json, math, random, shutil, tempfile, zlib, contextlib, yaml
+import argparse, datetime, hashlib, subprocess
 import joblib
 import numpy as np
 from joblib import Parallel, delayed
@@ -53,6 +59,7 @@ from ecg_plot import parse_lead_name_position_weights, standard_major_colors
 from realism import parse_realism
 from CameraPhotometry.photometry import LEVELS_MIN_SPAN, HUE_ROTATION_MAX
 from CameraSensor.sensor import SUPERSAMPLE_MAX, SENSOR_NOISE_MAX
+import s3_upload
 
 REQUIRED_KEYS = ('input_directory', 'output_directory')
 DRAWS = ('choice', 'uniform', 'randint', 'loguniform')
@@ -107,6 +114,17 @@ def frames_on_disk(output_root, name):
 def record_is_finished(output_root, name, store_config):
     """Whether this record's frames are all on disk AND all carry a finished chain.
 
+    See finished_annotations, which this asks; the notes on what the check can prove are there.
+    """
+    return finished_annotations(output_root, name, store_config) is not None
+
+
+def finished_annotations(output_root, name, store_config, frames=None):
+    """The record's annotation dicts, one per frame, when it is finished; None when it is not.
+
+    frames, the record's PNG paths in frame order, saves the directory scan when the caller
+    already has them. At store_config 0 there is no annotation and each frame gets {}.
+
     Conservative in one direction ON PURPOSE: anything this cannot prove is finished is
     reported unfinished, and the record is rendered again over the top. The cost of a false
     'unfinished' is one wasted render; the cost of a false 'finished' is a corpus with
@@ -123,31 +141,34 @@ def record_is_finished(output_root, name, store_config):
       0  Existence only. No annotation is written at all, so an interrupted batch cannot be
          detected here. Delete the output directory rather than resuming into it.
     """
-    frames = frames_on_disk(output_root, name)
+    if frames is None:
+        frames = frames_on_disk(output_root, name)
     if not frames:
-        return False
+        return None
     if not store_config:
-        return True
+        return [{} for _ in frames]
 
+    annotations = []
     for path in frames:
         annotation = path[:-4] + '.json'
         if not os.path.exists(annotation):
-            return False
+            return None
         try:
             with open(annotation) as handle:
                 json_dict = json.load(handle)
             width, height = Image.open(path).size
         except (OSError, ValueError):
             #A truncated PNG or an annotation cut off mid-write. Both mean the same thing.
-            return False
+            return None
         if store_config == 2 and FINISHED_MARKER not in json_dict:
-            return False
+            return None
         #The annotation counts its geometry in pixels of the frame it describes, and the
         #sensor stage rewrites it when it integrates the page down. A disagreement means
         #the file on disk is not the one the annotation describes.
         if (json_dict.get('width'), json_dict.get('height')) != (width, height):
-            return False
-    return True
+            return None
+        annotations.append(json_dict)
+    return annotations
 
 
 def draw(spec, rng):
@@ -219,19 +240,29 @@ def parse_only_records(value, config_path):
     return list(value)
 
 
-def build_args(config, config_path):
+def build_args(config, config_path, s3_prefix=None):
     """Overlay a config dict onto the batch parser's own namespace.
 
     Starting from the parser guarantees every attribute run_single_file touches exists
     and carries the tool's own default, so a key left out of the YAML behaves exactly as
     it would if the flag were left off the command line.
+
+    s3_prefix is the runner's --s3-prefix: given, the batch uploads its records as they
+    finish (s3_upload.py), and the settings come from the upload: block.
     """
     args = get_parser().parse_args(['-i', '', '-o', ''])
     known = set(vars(args))
     randomize = config.pop('randomize', None) or {}
-    #only_records is the runner's own key, not an argparse destination, so it leaves the dict
-    #before the unknown-key check and travels on the namespace under the same name.
+    #only_records and upload are the runner's own keys, not argparse destinations, so they
+    #leave the dict before the unknown-key check and travel on the namespace by name.
     args.only_records = parse_only_records(config.pop('only_records', None), config_path)
+    args.upload = s3_upload.validate_upload(config.pop('upload', None), config_path)
+    args.s3_prefix = None
+    if s3_prefix is not None:
+        try:
+            args.s3_prefix = 's3://%s/%s' % s3_upload.parse_s3_uri(s3_prefix)
+        except ValueError as error:
+            raise SystemExit(str(error))
 
     #Reject unknown keys rather than ignoring them. A parameter that parses and does
     #nothing is the failure mode this codebase already suffers from with
@@ -747,6 +778,22 @@ def build_args(config, config_path):
             "from a finished one and would be kept. Use store_config 2, or set "
             "skip_existing: false and clear the output directory yourself." % config_path)
 
+    #The upload deletes local copies, so what proves a record finished and what the digitizer
+    #needs of it must both be there. store_config 2 is the only exact finished check (see
+    #finished_annotations); build_cache_s3.py reads the two gridpoint .npy files of every page;
+    #and without skip_existing a resume would render the records still on disk again while
+    #skipping the uploaded ones, a directory with two configurations in it.
+    if args.s3_prefix:
+        missing = [what for what, ok in (
+            ('store_config: 2', args.store_config == 2),
+            ('store_gridpoints: true', bool(args.store_gridpoints)),
+            ('skip_existing: true', bool(args.skip_existing))) if not ok]
+        if missing:
+            raise SystemExit(
+                "%s: --s3-prefix needs %s. The upload deletes local copies once they are on "
+                "S3, so the exact finished check, the gridpoint files the digitizer reads and "
+                "the resume must all be on." % (config_path, ', '.join(missing)))
+
     #max_workers is a count of processes, so anything but a whole number from 1 up is a typo.
     #YAML true arrives as a bool, which Python also accepts as the int 1, so it is refused by
     #type rather than let through as a single worker nobody asked for by that name.
@@ -834,7 +881,34 @@ def render_record(args, randomize, record, input_directory, output_root):
 
 
 #Keys whose value is a mapping merged key by key under extends:, rather than replaced whole.
-MERGED_KEYS = ('randomize', 'realism')
+MERGED_KEYS = ('randomize', 'realism', 'upload')
+
+#Keys that decide how a run goes, not what a page looks like. Left out of the config hash in
+#the S3 manifest, so raising max_num_images from 6000 to 12000 keeps one dataset one hash.
+RUN_CONTROL_KEYS = ('max_num_images', 'max_workers', 'skip_existing', 'upload', 'only_records',
+                    'output_directory')
+
+
+def config_digest(resolved):
+    """sha256 of the resolved config without its run-control keys, canonical JSON."""
+    subset = {key: value for key, value in resolved.items() if key not in RUN_CONTROL_KEYS}
+    text = json.dumps(subset, sort_keys=True, separators=(',', ':'), default=str)
+    return hashlib.sha256(text.encode('utf-8')).hexdigest()
+
+
+def git_state():
+    """(HEAD commit, tracked paths with changes) of the generator, or (None, None)."""
+    try:
+        commit = subprocess.run(['git', '-C', GENERATOR_ROOT, 'rev-parse', 'HEAD'],
+                                capture_output=True, text=True, timeout=60)
+        status = subprocess.run(['git', '-C', GENERATOR_ROOT, 'status', '--porcelain',
+                                 '--untracked-files=no'], capture_output=True, text=True,
+                                timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return None, None
+    if commit.returncode != 0 or status.returncode != 0:
+        return None, None
+    return commit.stdout.strip(), [line[3:] for line in status.stdout.splitlines() if line.strip()]
 
 
 def load_config(config_path, chain=()):
@@ -869,14 +943,27 @@ def load_config(config_path, chain=()):
     return merged
 
 
+def parse_cli():
+    parser = argparse.ArgumentParser(
+        description="Render a batch of ECG images from a YAML file (see the README).")
+    parser.add_argument('config', help="the batch YAML")
+    parser.add_argument(
+        '--s3-prefix', dest='s3_prefix', default=None, metavar='s3://BUCKET/PREFIX',
+        help="upload each lot of finished records to this prefix as the batch renders, and "
+             "delete uploaded local copies when the disk runs low (settings: upload: in the "
+             "YAML)")
+    return parser.parse_args()
+
+
 def main():
-    if len(sys.argv) != 2:
-        raise SystemExit("usage: run_batch_from_config.py <config.yaml>")
+    cli = parse_cli()
 
-    config_path = os.path.normpath(os.path.join(INVOCATION_CWD, sys.argv[1]))
+    config_path = os.path.normpath(os.path.join(INVOCATION_CWD, cli.config))
     config = load_config(config_path)
+    #build_args consumes the dict; the manifest hashes and saves the config as resolved.
+    resolved = copy.deepcopy(config)
 
-    args, randomize = build_args(config, config_path)
+    args, randomize = build_args(config, config_path, s3_prefix=cli.s3_prefix)
 
     input_directory = os.path.normpath(os.path.join(os.getcwd(), args.input_directory))
     output_root = os.path.normpath(os.path.join(os.getcwd(), args.output_directory))
@@ -884,6 +971,17 @@ def main():
         raise SystemExit("input_directory does not exist: %s" % input_directory)
     os.makedirs(output_root, exist_ok=True)
     args.input_directory = input_directory
+
+    #A directory an upload run has deleted from cannot be resumed without the ledger: the
+    #records only S3 holds would be rendered again and the cap would stop counting them.
+    target = os.path.join(output_root, s3_upload.RUNNER_DIR, s3_upload.TARGET_FILE)
+    if not args.s3_prefix and os.path.exists(target):
+        with open(target) as handle:
+            uploads_to = json.load(handle).get('s3_prefix')
+        raise SystemExit(
+            "%s uploads to %s (%s). Resume it with --s3-prefix %s; without it the records that "
+            "live only on S3 would be rendered again." % (output_root, uploads_to, target,
+                                                         uploads_to))
 
     #No batch-wide seeding here: render_record reseeds every RNG per record.
 
@@ -895,6 +993,15 @@ def main():
     print("skip_existing    : %s" % bool(args.skip_existing))
     print("max_workers      : %s" % args.max_workers)
     print("randomized       : %s" % (', '.join(sorted(randomize)) or 'none'))
+    if args.s3_prefix:
+        settings = args.upload
+        print("upload           : %s, lots of %d; delete uploaded copies below %s GB free up to "
+              "%s GB, pause below %s GB%s" % (
+                  args.s3_prefix, settings['batch_size'], settings['min_free_gb'],
+                  settings['target_free_gb'], settings['hard_floor_gb'],
+                  ', backlog protected' if settings['protect_backlog'] else ''))
+    else:
+        print("upload           : off (no --s3-prefix)")
     sys.stdout.flush()
 
     #find_records mirrors the corpus tree under the directory it is given, as a side
@@ -926,10 +1033,11 @@ def main():
         records.append((header_file, recording_file, name))
     duplicates = len(pairs) - len(records)
     print("records          : %d unique (%d duplicate name(s) skipped)" % (len(records), duplicates))
+    by_name = {record[2]: record for record in records}
 
     if args.only_records is not None:
         wanted = set(args.only_records)
-        unknown = sorted(wanted - {record[2] for record in records})
+        unknown = sorted(wanted - set(by_name))
         if unknown:
             raise SystemExit("only_records: %d name(s) not in the corpus: %s"
                              % (len(unknown), ', '.join(unknown[:10])))
@@ -937,11 +1045,19 @@ def main():
         print("only_records     : %d record(s)" % len(records))
     sys.stdout.flush()
 
+    storage, waiting = None, set()
+    if args.s3_prefix:
+        storage, waiting = start_upload(args, randomize, resolved, records, by_name,
+                                        input_directory, output_root)
+
     #max_num_images caps FRAMES, not records: run_single_file returns the number of frames it
     #wrote. On this corpus the two coincide at one frame per record, but a longer recording
     #would split into several.
     skip_existing = bool(args.skip_existing)
     cap = args.max_num_images
+    #With the upload on, a wave is at most one lot, so the disk is looked at between waves
+    #even with several workers; with one worker it is looked at before every record.
+    wave_limit = args.upload['batch_size'] if storage is not None else None
 
     total = len(records)
     if cap != -1:
@@ -954,27 +1070,53 @@ def main():
     #batch that already holds 1500 renders the remaining 2500 rather than another 4000.
     present = 0
     skipped = 0
+    #Records skipped because the ledger has them on S3, whether or not a local copy is left.
+    #They count towards the cap exactly like the finished records on disk.
+    on_s3 = 0
     cursor = 0
+
+    def after_render(record, frames):
+        if storage is not None and frames:
+            note_rendered(storage, args, randomize, record, input_directory, output_root)
+
+    parallel_options = {'n_jobs': args.max_workers, 'batch_size': 1}
+    if storage is not None:
+        #Each record's manifest line as soon as it is back, not when the whole wave is.
+        parallel_options['return_as'] = 'generator'
     #The bar counts RECORDS, rendered or skipped: the joblib callback tqdm_joblib patches fires
     #once per task, and a task is a record. On this corpus that is also the image count.
     with tqdm_joblib(total=total, unit='record', desc='rendering', dynamic_ncols=True) as bar, \
-            Parallel(n_jobs=args.max_workers, batch_size=1) as parallel:
+            Parallel(**parallel_options) as parallel:
         #Dispatched in WAVES, each as many records as the cap still has room for. The serial
         #loop could stop the moment the cap was met; a worker cannot be stopped mid-render, and
         #a record's frame count is only known once it has rendered. So a wave assumes one frame
         #per record, and the loop goes round again only if some record came back with none.
-        #Without a cap there is a single wave.
+        #Without a cap and without the upload there is a single wave.
         while cursor < len(records):
             wave = []
-            while cursor < len(records) and (cap == -1 or written + present + len(wave) < cap):
+            while cursor < len(records) and (cap == -1 or written + present + len(wave) < cap) \
+                    and (wave_limit is None or len(wave) < wave_limit):
                 record = records[cursor]
                 cursor += 1
+                #The ledger first: a record on S3 may have no local copy left, and the disk
+                #alone would call it unfinished and render it again.
+                if storage is not None and record[2] in storage.ledger:
+                    present += storage.ledger[record[2]].get('frames', 1)
+                    on_s3 += 1
+                    bar.update(1)
+                    continue
                 #Skip what is already finished. Cheap to check, and done here before anything
                 #is dispatched, so a resume over a nearly complete directory costs a stat per
                 #record. SAFE BECAUSE A RECORD'S IMAGES DEPEND ON ITS NAME ALONE - see
                 #render_record - so skipping its neighbours cannot change them. See the note in
-                #the finished-frames helper for what the check itself can prove.
-                if skip_existing and record_is_finished(output_root, record[2], args.store_config):
+                #the finished-frames helper for what the check itself can prove. With the upload
+                #on, the startup scan has already decided (s3_upload.open_storage).
+                if storage is not None:
+                    finished = record[2] in waiting
+                else:
+                    finished = skip_existing and record_is_finished(output_root, record[2],
+                                                                    args.store_config)
+                if finished:
                     present += len(frames_on_disk(output_root, record[2]))
                     skipped += 1
                     bar.update(1)
@@ -987,13 +1129,24 @@ def main():
                 #joblib sends n_jobs=1 down a sequential path that never builds the completion
                 #callback tqdm_joblib patches, so the bar is advanced here instead.
                 for record in wave:
-                    written += render_record(args, randomize, record, input_directory, output_root)
+                    if storage is not None:
+                        storage.wait_for_space()
+                    frames = render_record(args, randomize, record, input_directory, output_root)
+                    written += frames
+                    after_render(record, frames)
                     bar.update(1)
             else:
-                written += sum(parallel(
+                if storage is not None:
+                    storage.wait_for_space()
+                results = parallel(
                     delayed(render_record)(args, randomize, record, input_directory, output_root)
-                    for record in wave))
+                    for record in wave)
+                for record, frames in zip(wave, results):
+                    written += frames
+                    after_render(record, frames)
 
+    if on_s3:
+        print("on S3            : %d record(s) in the ledger, skipped" % on_s3)
     if skipped:
         #Named rather than silent. A resume that skips everything looks exactly like a run
         #that did nothing, and the difference matters when a parameter was just changed:
@@ -1001,6 +1154,127 @@ def main():
         #by the configuration in front of you.
         print("skipped          : %d record(s), %d image(s) already finished" % (skipped, present))
     print("done: %d image(s) written, %d in %s" % (written, written + present, output_root))
+    sys.stdout.flush()
+    if storage is not None:
+        storage.finish()
+        s3_upload.log("upload: done - %s" % storage.describe())
+
+
+#Annotation values whose absence from a backfilled record would be unsafe to assume. A record
+#with no manifest line was not seen returning from render_record, so the PNG on disk is trusted
+#only when the JSON was written AFTER the last stage that rewrites it - true when neither the
+#sensor noise nor the QR stamp ran (gen_ecg_image_from_data.py writes the JSON before both).
+def backfill_is_safe(args, annotations):
+    if args.add_qr_code:
+        return False
+    return all(not annotation.get('sensor_noise', 0) for annotation in annotations)
+
+
+def start_upload(args, randomize, resolved, records, by_name, input_directory, output_root):
+    """Open the S3 storage for this run: adoption or resume, backfill, then the thread."""
+    names = [record[2] for record in records]
+    collisions = {}
+    for name in names:
+        collisions.setdefault(s3_upload.s3_name(name), []).append(name)
+    clashing = sorted(group for group in collisions.values() if len(group) > 1)
+    if clashing:
+        raise SystemExit("upload: record names that share an S3 name once _lr is stripped: %s"
+                         % '; '.join(' and '.join(group) for group in clashing[:5]))
+
+    runner_dir = os.path.join(output_root, s3_upload.RUNNER_DIR)
+    os.makedirs(runner_dir, exist_ok=True)
+    digest = config_digest(resolved)
+    saved = os.path.join(runner_dir, 'config-%s.yaml' % digest[:12])
+    if not os.path.exists(saved):
+        s3_upload.write_atomic(saved, (
+            "# The resolved batch config (extends: merged) of the pages whose manifest lines\n"
+            "# carry config_sha256 %s.\n# The hash leaves out %s.\n# Regenerate a page by "
+            "extending this file - see the README.\n" % (digest, ', '.join(RUN_CONTROL_KEYS)))
+            + yaml.safe_dump(resolved, sort_keys=True, allow_unicode=True))
+    commit, dirty = git_state()
+    args._manifest_context = {'config_sha256': digest, 'render_commit': commit,
+                              'dirty_paths': dirty}
+
+    def finished(name, backfill):
+        files = s3_upload.record_files(output_root, name)
+        frames = [os.path.join(output_root, base) for base in s3_upload.frame_files(files, name)]
+        annotations = finished_annotations(output_root, name, args.store_config, frames)
+        if annotations is None or not backfill:
+            return annotations
+        return annotations if backfill_is_safe(args, annotations) else None
+
+    def entry_for(name, source, annotations, files):
+        return manifest_entry(args, randomize, by_name.get(name), name, source, annotations,
+                              files, output_root, input_directory)
+
+    storage, waiting = s3_upload.open_storage(args.upload, args.s3_prefix, output_root,
+                                              finished, entry_for)
+    storage.start()
+    return storage, waiting
+
+
+def manifest_entry(args, randomize, record, name, source, annotations, files, output_root,
+                   input_directory):
+    """One manifest line: what it takes to render this record again, and what it applied."""
+    context = args._manifest_context
+    frames = [base[:-4] for base in s3_upload.frame_files(files, name)]
+    applied, dropped = {}, set()
+    for stem, annotation in zip(frames, annotations):
+        kept = {}
+        for key, value in annotation.items():
+            if key in s3_upload.HEAVY_KEYS or \
+                    len(json.dumps(value, default=str)) > s3_upload.MAX_APPLIED_VALUE_BYTES:
+                dropped.add(key)
+            else:
+                kept[key] = value
+        applied[stem] = kept
+    if source == 'render':
+        rendered_at = s3_upload.now_iso()
+        commit, dirty = context['render_commit'], context['dirty_paths']
+    else:
+        #Rendered by some earlier process: its commit is not known, and the time is the PNG's.
+        first = os.path.join(output_root, frames[0] + '.png') if frames else None
+        rendered_at = datetime.datetime.fromtimestamp(os.path.getmtime(first)).astimezone() \
+            .isoformat(timespec='seconds') if first else None
+        commit, dirty = None, None
+    randomized = None
+    if record is not None:
+        drawn = record_args(args, randomize, record, input_directory, output_root)
+        randomized = {key: getattr(drawn, key) for key in sorted(randomize)}
+    prefix = args.s3_prefix
+    return {
+        'record': name,
+        'source': source,
+        'rendered_at': rendered_at,
+        'frames': frames,
+        'files': files,
+        's3': {base: '%s/%s' % (prefix, s3_upload.s3_name(base)) for base in files},
+        'input': {'header_file': record[0], 'recording_file': record[1]} if record else None,
+        'seed': args.seed,
+        'chain_seed': chain_seed(args.seed, name),
+        'randomized': randomized,
+        'applied': applied,
+        'dropped_keys': sorted(dropped),
+        'config_sha256': context['config_sha256'],
+        'render_commit': commit,
+        'dirty_paths': dirty,
+    }
+
+
+def note_rendered(storage, args, randomize, record, input_directory, output_root):
+    """Write the manifest line of a record render_record just returned, then queue it."""
+    name = record[2]
+    files = s3_upload.record_files(output_root, name)
+    frames = [os.path.join(output_root, base) for base in s3_upload.frame_files(files, name)]
+    annotations = finished_annotations(output_root, name, args.store_config, frames)
+    if annotations is None:
+        s3_upload.log("upload: %s rendered but does not read as finished; not queued, the next "
+                      "run renders it again" % name)
+        return
+    entry = manifest_entry(args, randomize, record, name, 'render', annotations, files,
+                           output_root, input_directory)
+    storage.manifest.append([entry])
+    storage.add_finished(name, files)
 
 
 if __name__ == '__main__':
