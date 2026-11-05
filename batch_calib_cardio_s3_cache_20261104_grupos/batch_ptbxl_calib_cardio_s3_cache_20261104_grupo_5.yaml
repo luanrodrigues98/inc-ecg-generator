@@ -20,6 +20,25 @@
 #   - the "CAL" pulse at the right end and the device text (8/8) - clb-right-cal-pulse.md;
 #   - the white backing band (8/8) and the sheet's geometry - page-geometry.md;
 #   - a rhythm strip in lead III (1/8, 1972e486): full_mode is one lead per batch.
+#
+# GRID RULE WIDTH - inc_grid, added 2026-11-05 by calibrate-from-real, run
+# ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos_inc_grid-20261105/ (relatorio.md).
+# FWHM of the horizontal rules, px, on the digitizer's 400 dpi page (prepare_page, rectifier_v2):
+#   real, this group: per lead (94 leads, 8 pages) 5 mm 4 / 6 / 9 (p10/p50/p90), 1 mm 2.5 / 4 / 7;
+#     per page (profile_pages.py, 8 exams) 5 mm 5 / 5.8 / 6.3, 1 mm 3 / 4 / 5.3; contrast 22.6 / 19.4.
+#     The per-lead tail (7.75-9 px) comes from the three pages the rectifier did not fully straighten
+#     (one normalized, two by its affine fallback), where a row median over a whole lead widens a
+#     tilted rule; per page, in short tiles, they read 6 / 6 / 7 px.
+#   this file without inc_grid (2026-11-04 probe, 3 pages at 400 dpi): 5 mm 3 / 3 / 3, 1 mm 3 / 3 / 3,
+#     contrast 12.6 / 9.4.
+#   chosen: p 1.0, major_mm [0.28, 0.46] -> 4.5-7.2 px, median ~5.7 (FWHM ~ 15.3 x mm + 0.2);
+#     minor_ratio [0.50, 0.90] -> 1 mm rule 0.14-0.41 mm, 3-6.5 px, median ~4.
+#   probe (records 1-3 at 400 dpi with major_mm [0.25, 0.55]; draws 0.387 / 0.525 / 0.540 mm; every
+#     other draw byte-identical to the 2026-11-04 probe): 5 mm 6 / 8.5 / 8, 1 mm 6 / 5 / 7 - on the
+#     transfer curve, two pages above the real per-page range: hence the top lowered from 0.55 to
+#     0.46 mm. Contrast 11.4 against the real 22.6: these rules come out LIGHTER than the real ones
+#     (palette 8 on its salmon paper, the known gap above) - no darkness concern here.
+#   Confidence: medium (n = 8 exams). One of the column net's lock-on pages is here (1608db90).
 extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
 
 output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_5
@@ -79,3 +98,8 @@ realism:
     bias: [0.6, 1.5]
     styles: [0, 1, 2, 3, 4, 5, 6, 7]
     avoid_names: true
+  # Grid rule widths: see GRID RULE WIDTH in the header.
+  inc_grid:
+    p: 1.0
+    major_mm: [0.28, 0.46]
+    minor_ratio: [0.50, 0.90]

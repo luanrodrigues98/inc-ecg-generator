@@ -22,6 +22,23 @@
 #   - punch holes over row 1 (8/20 control pages, 24-58%) and the rhythm row - punch-holes.md;
 #   - the printed "ID:" / "Nome:" labels (19/20), black timing marks along an edge (19/20), the
 #     long footer line, the thermal fading that follows the trace's slope.
+#
+# GRID RULE WIDTH - inc_grid, added 2026-11-05 by calibrate-from-real, run
+# ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos_inc_grid-20261105/ (relatorio.md).
+# FWHM of the horizontal rules, px, on the digitizer's 400 dpi page (prepare_page, rectifier_v2):
+#   real, this group: per lead (587 leads, 51 pages) 5 mm 3 / 4 / 4 (p10/p50/p90), 1 mm 2 / 3 / 3;
+#     per page (profile_pages.py, 50 exams) 5 mm 4 / 4 / 4, 1 mm 2 / 3 / 3; contrast 22.1 / 19.4.
+#   this file without inc_grid (2026-11-04 probe, 3 pages at 400 dpi): 5 mm 3 / 3 / 3, 1 mm 3 / 3 / 3,
+#     contrast 27.8 / 20.8 - the 5 mm rule a pixel thinner than on 90% of the real pages.
+#   chosen: p 1.0, major_mm [0.22, 0.28] -> 3.6-4.5 px (FWHM ~ 15.3 x mm + 0.2 above a 3 px floor,
+#     measured at 350-600 dpi on 2026-11-05); minor_ratio [0.45, 0.75] -> 1 mm rule 0.10-0.21 mm,
+#     which stays at 2-3 px.
+#   probe (records 1-3 at 400 dpi with major_mm [0.21, 0.28]; draws 0.246 / 0.275 / 0.278 mm; every
+#     other draw byte-identical to the 2026-11-04 probe): 5 mm 4 / 4 / 4.5, 1 mm 3 / 3 / 3. Contrast
+#     27.8 against the real 22.1: 1.26x darker, inside the run's 50% rule, and set by palette 7's
+#     colour, not by the width (27.8 at 3 px too).
+#   Confidence: high for the width (n = 50 exams; transfer measured at this palette and dpi). Two of
+#   the column net's lock-on pages are in this group (b30a3a97, a4268d73).
 extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
 
 # A NEW directory: the runner writes flat.
@@ -90,3 +107,8 @@ realism:
     bias: [0.6, 1.5]
     styles: [0, 1, 2, 3, 4, 5, 6, 7]
     avoid_names: true
+  # Grid rule widths: see GRID RULE WIDTH in the header.
+  inc_grid:
+    p: 1.0
+    major_mm: [0.22, 0.28]
+    minor_ratio: [0.45, 0.75]

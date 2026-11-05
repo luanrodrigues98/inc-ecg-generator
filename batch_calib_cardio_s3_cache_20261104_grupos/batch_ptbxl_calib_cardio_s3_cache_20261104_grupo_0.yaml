@@ -30,6 +30,29 @@
 #     (b1034fcf; boxes spanning two to four rows) - cardioline-format.md;
 #   - JPEG blocks (no jpeg option yet), photo perspective and background.
 # The 600 dpi page is approximated by the low resolution like the rest: it is one page of five.
+#
+# GRID RULE WIDTH - NO inc_grid, checked 2026-11-05 by calibrate-from-real, run
+# ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos_inc_grid-20261105/ (relatorio.md).
+# FWHM of the horizontal rules, px, on the digitizer's 400 dpi page (prepare_page, rectifier_v2):
+#   real (5 exams: 4 at 72-122 dpi, the 600 dpi Cardioline): per lead (49 leads) 5 mm 2.9 / 6 / 7.6
+#     (p10/p50/p90), 1 mm 2 / 7 / 8; per page (profile_pages.py) 5 mm 3.8 / 5 / 7.6, 1 mm 3.2 / 5 / 7.6.
+#     The two methods part by 2 px on the 1 mm rule (two 112-122 dpi pages the rectifier only
+#     normalized): the per-lead one is taken as the reference here.
+#   this file as it stands (probe of 3 pages at 90-103 dpi, no inc_grid, records 1-3; the
+#     2026-11-04 probe predates this file's blur/rotate/exposure changes): 5 mm 5 / 7 / 6, 1 mm
+#     6 / 9 / 8 - the 5 mm rule inside the real range, the 1 mm one at or above it (per lead p50 7,
+#     per page 5).
+#     The synthetic side is measured per page only: against the per-lead reference the rules sit
+#     within 1 px (5 mm 6 vs 6, 1 mm 8 vs 7); against the real per-page numbers they are thicker.
+#     As on the real pages, the 1 mm rule reads as thick as the 5 mm one or thicker (6/9/8 vs
+#     5/7/6): at this dpi the 1 mm spacing is ~3.5 native px and the minor rules run together.
+#   with inc_grid, record 1 (90 dpi) drawn three ways, 5 mm / 1 mm px: 0.085 / 0.085 mm -> 5 / 5
+#     (contrast 13 / 17); 0.176 / 0.176 mm (no inc_grid) -> 5 / 6 (20 / 16); 0.26 / 0.35 mm -> 7 / 6.
+#     Records 1-4 at 0.26-0.48 mm: 5 mm 7 / 8 / 9 / 6.
+#   At ~100 dpi one pixel is ~0.25 mm: the upsampling to 400 dpi spreads any rule over ~5 px
+#   (measured above: halving the width moves it by 0-1 px and only pales it), and a wider draw
+#   moves the rule away from the real one. So inc_grid has nothing to give this group.
+#   Confidence: low (n = 5 exams, five devices; the floor measured on one page).
 extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
 
 output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_0

@@ -16,6 +16,23 @@
 #     list - THIS FILE DRAWS THE SHEET ONLY;
 #   - the "CAL" pulse at the right end and the device text - clb-right-cal-pulse.md;
 #   - the white backing band and the sheet's geometry - page-geometry.md.
+#
+# GRID RULE WIDTH - inc_grid, added 2026-11-05 by calibrate-from-real, run
+# ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos_inc_grid-20261105/ (relatorio.md).
+# FWHM of the horizontal rules, px, on the digitizer's 400 dpi page (prepare_page, rectifier_v2):
+#   real: ONE exam - per lead (24 leads, both scans) 5 mm 5 / 6 / 7 (p10/p50/p90), 1 mm 3 / 3 / 4;
+#     per page (profile_pages.py, the 600 dpi scan) 5 mm 6, 1 mm 3; contrast 11.8 / 11.0.
+#   this file without inc_grid (2026-11-04 probe, 3 pages at 400 dpi): 5 mm 3 / 3 / 3, 1 mm 3 / 3 / 3,
+#     contrast 16.0 / 13.9.
+#   chosen, WIDENED rather than fitted (one exam): p 1.0, major_mm [0.20, 0.45] -> 3.3-7.1 px (this
+#     exam's 5-7 px and group 2's 3-5.5 px, the same CLB sheet); minor_ratio [0.35, 0.70] -> 1 mm
+#     rule 0.07-0.32 mm, 2-5 px (this exam's 1 mm rule is half the 5 mm one's width).
+#   NOT PROBED: the run's 24-page budget went to the larger and the low-resolution groups. Same
+#     palette 9, scan chain and dpi range as group 2, whose probe confirmed the transfer curve.
+#     Darkness as group 2's: ~16 against this exam's 11.8 (1.36x per page, 1.5x per lead) - feature
+#     request grid-rule-contrast.md in the run. Unlike group 2 the top is not cut for darkness: per
+#     page this exam is 1.36x, under the run's 50% rule, and its 5 mm rule sits at 5-7 px in bulk.
+#   Confidence: low (n = 1 exam, not probed).
 extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
 
 output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_4
@@ -72,3 +89,8 @@ realism:
     bias: [0.6, 1.5]
     styles: [0, 1, 2, 3, 4, 5, 6, 7]
     avoid_names: true
+  # Grid rule widths: see GRID RULE WIDTH in the header.
+  inc_grid:
+    p: 1.0
+    major_mm: [0.20, 0.45]
+    minor_ratio: [0.35, 0.70]

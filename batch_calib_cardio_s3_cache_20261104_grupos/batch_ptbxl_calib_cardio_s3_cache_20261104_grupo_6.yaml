@@ -16,6 +16,22 @@
 #   - the "CAL" pulse at the right end and the device text - clb-right-cal-pulse.md;
 #   - the CLB sheet's geometry - page-geometry.md;
 #   - a cast off the daylight locus, if the probe shows the grey-beige is out of reach.
+#
+# GRID RULE WIDTH - NO inc_grid, checked 2026-11-05 by calibrate-from-real, run
+# ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos_inc_grid-20261105/ (relatorio.md).
+# FWHM of the horizontal rules, px, on the digitizer's 400 dpi page (prepare_page, rectifier_v2):
+#   real: ONE page, and the digitizer got its scale wrong - its grid lattice locked on a 2x harmonic
+#     (188 dpi for a ~92 dpi photo), so its "400 dpi" page is at ~200 dpi of paper and its rules read
+#     about half their width: per lead (11 leads) 5 mm 3 / 4 / 5 (p10/p50/p90), 1 mm 2.8 / 3 / 3.6;
+#     per page (profile_pages.py, 5 tiles only) 5 mm 5.5, 1 mm 3. At the true scale they would read
+#     ~8-11 and ~6 px - computed from the 2x error, not measured.
+#   this file as it stands (probe of 3 pages at 90-94 dpi, no inc_grid, records 1-3; the
+#     2026-11-04 probe predates this file's blur change and showed no grid): 5 mm 9 / 8 / 3.5,
+#     1 mm 10 / 9 / 6 - the 3.5 / 6 page's grid scale in the profile is itself a harmonic (282 dpi).
+#   with inc_grid (probe of 4 pages, records 1-4, major 0.26-0.48 mm): 5 mm 7.5 / 8 / 4 / 8.25.
+#   (synthetic side measured per page only). The measured target is an artefact of the scale error,
+#   and the synthetic rules already sit at the pixel floor of a ~90 dpi page (group 0 at 90 dpi:
+#   0.085 mm still reads 5 px): no inc_grid. Confidence: minimal (n = 1, scale error).
 extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
 
 output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_6

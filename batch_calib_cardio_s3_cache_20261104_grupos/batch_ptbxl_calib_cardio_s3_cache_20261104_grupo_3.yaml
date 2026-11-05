@@ -30,6 +30,19 @@
 #   - the 6x2 device (84455418): no rhythm strip, DOTTED grid, a pulse at the end of every
 #     segment, names on the baseline - seen once, on the watch list;
 #   - the pink strip's and the CLB sheet's geometry, the CLB "CAL" pulse at the right end.
+#
+# GRID RULE WIDTH - NO inc_grid, checked 2026-11-05 by calibrate-from-real, run
+# ~/.cache/inc-ecg-generator-run/calib/cardio_s3_cache_grupos_inc_grid-20261105/ (relatorio.md).
+# FWHM of the horizontal rules, px, on the digitizer's 400 dpi page (prepare_page, rectifier_v2):
+#   real (5 exams, 74-122 dpi): per lead (42 leads) 5 mm 5 / 6 / 7.9 (p10/p50/p90), 1 mm 4.8 / 5 / 7;
+#     per page (profile_pages.py) 5 mm 5 / 6 / 7, 1 mm 4.3 / 5.5 / 7.4.
+#   this file as it stands (2026-11-04 probe, 4 pages at 85-113 dpi; not re-rendered - its realised
+#     draws all fall inside this file's ranges, but the file was rewritten after it): 5 mm
+#     5 / 6 / 6 / 7, 1 mm 5 / 7 / 3 / 11 - inside the real range, p50 6 on both rules.
+#   At this resolution the width is set by the pixel, not by the drawn width (group 0's probes at
+#   90-104 dpi: 0.085 mm -> 5 px, 0.176 mm -> 5-7 px, 0.26-0.48 mm -> 6-9 px): a wider draw would
+#   push the rules past the real ones, a thinner one only pales them. Both sides measured per page
+#   here (the per-lead reference reads the same p50). Confidence: low-medium (n = 5 exams).
 extends: ../batch_ptbxl_calib_cardio_s3_cache_20261004.yaml
 
 output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261104_grupo_3
