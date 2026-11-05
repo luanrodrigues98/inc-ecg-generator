@@ -33,7 +33,7 @@ extends: batch_ptbxl_inc_v2.yaml
 # A NEW directory: the runner writes flat, and ptbxl_synthetic_inc_v2 stays as it is.
 output_directory: /home/luan-rodrigues/faculdade/inc-ecg-digitizer/datasets/ptbxl_synthetic_calib_cardio_s3_cache_20261004
 
-max_num_images: 6000
+max_num_images: 12000
 
 # randomize: and realism: merge entry by entry with the base; every other key replaces it.
 randomize:
