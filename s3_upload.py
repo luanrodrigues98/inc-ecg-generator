@@ -418,7 +418,11 @@ class Storage:
     def describe(self):
         with self.lock:
             waiting = len(self.pending)
-        deletable = len([name for name in self.local if name not in self.protected])
+        #One C-level set difference: the storage thread adds to and discards from self.local
+        #while this runs on the main thread, and a Python-level loop over the set could lose
+        #the GIL halfway and raise "Set changed size during iteration" - in wait_for_space,
+        #that would stop the render the upload must never stop.
+        deletable = len(self.local - self.protected)
         return ('%d waiting for upload, %d in the ledger, %d uploaded copies deletable, '
                 '%d protected%s' % (waiting, len(self.ledger), deletable, len(self.protected),
                                     '; AWS SESSION EXPIRED' if self.expired_since else ''))
@@ -520,7 +524,7 @@ class Storage:
             log("upload: deleted the local copy of %d uploaded record(s), %.2f GB; %.1f GB free"
                 % (deleted, freed / 2 ** 30, free))
         if free < target and time.time() - self.last_stuck_note >= 3600:
-            if not [name for name in self.local if name not in self.protected]:
+            if not self.local - self.protected:
                 log("upload: %.1f GB free, below target_free_gb %s, and no uploaded copy is left "
                     "to delete - %s" % (free, target, self.describe()))
                 self.last_stuck_note = time.time()
