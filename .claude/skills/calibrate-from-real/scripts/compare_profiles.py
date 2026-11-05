@@ -29,7 +29,9 @@ import pandas as pd
 MM = ["dpi", "page_w_mm", "page_h_mm", "trace_fwhm_mm"]
 NUMERIC = ["aspect", "dpi", "page_w_mm", "page_h_mm", "abs_skew_deg", "paper_lum", "paper_r", "paper_g", "paper_b",
            "tone_r", "tone_g", "tone_b", "grid_cover", "grid_hue_signed", "colourfulness", "paper_noise",
-           "trace_fwhm_mm", "trace_core", "alias_1440", "alias_1024"]
+           "trace_fwhm_mm", "trace_core", "alias_1440", "alias_1024",
+           # grid rules on the digitizer's 400 dpi page (profile_pages.py); absent in older CSVs
+           "grid5_fwhm_px400", "grid1_fwhm_px400", "grid5_contrast", "grid1_contrast"]
 
 parser = argparse.ArgumentParser()
 parser.add_argument("real_csv")

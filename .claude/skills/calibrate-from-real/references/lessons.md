@@ -91,6 +91,14 @@ decided, by looking, before anything else is measured.
   The audit reads it by eye.
 - The label-free proxy follows accuracy (Spearman +0.82) with `best_v2.pt` on n=66. It is
   validated for that model only.
+- Until 2026-11-05 the generator drew every grid rule at 0.5 pt: 3 px FWHM on the
+  digitizer's 400 dpi page, on every synthetic page, against 3-9 px on the 5 mm rule of the
+  scans - and the column net locks onto thick dark rules it never saw (`inc_grid` draws them
+  now). Measure rule width on the 400 dpi page the digitizer builds (`prepare_page`), never
+  in native pixels: on a 90 dpi page one native pixel is ~0.28 mm, ~4.4 px at 400 dpi, so a
+  "1 px" rule there already reads as thick as most rules of a 600 dpi scan (3-6 px). Measured
+  at 90 dpi: a rule drawn at 0.085 or 0.176 mm reads ~5 px either way - below one native pixel,
+  the width drawn only changes how pale the rule is.
 
 ## Look at the page the way the detector does
 

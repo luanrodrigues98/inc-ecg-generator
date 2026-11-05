@@ -36,6 +36,26 @@ Per page:
                             (_common.aliasing_score). Generator pages alias too: compare
                             at matched resolution (--synth-filter on truth_dpi)
 
+  grid5_fwhm_px400, grid1_fwhm_px400, grid5_contrast, grid1_contrast, grid_tiles, page400_source
+                            width (FWHM, px) and contrast (L* x 100/255, paper minus rule) of
+                            the horizontal 5 mm and 1 mm grid rules, on the 400 dpi page the
+                            digitizer itself builds (digitizer.prepare_page with the pipeline's
+                            rectifier_v2.pth) - never in native pixels, where one pixel of a
+                            90 dpi page is already ~0.28 mm. The method of the per-lead
+                            reference (~/.cache/inc-ecg-digitizer-run/colnet-linha-grade/
+                            fwhm_local.py) applied to short tiles of the whole page: per tile,
+                            the row profile of L = median over the tile's columns, with the
+                            dark strokes (trace, text) and 10 px above and below them left out;
+                            the 1 mm and 5 mm phases of that profile; per rule, the minimum
+                            within +-3 px of its phase, the background = the maximum within
+                            +-7 px, the FWHM = contiguous rows below half-way, kept when the
+                            contrast is >= 4. Median over the rules of a tile, then over the
+                            tiles. Tiles are short (GRID_TILE_W px) because a row median turns
+                            skew into width: 0.2 deg over 4500 px moves a rule ~16 px. Empty
+                            when the page could not be brought to 400 dpi (page400_source
+                            "original") or no tile shows a periodic grid. --no-grid skips it
+                            (it runs a second rectifier: +5-25 s a page on CPU)
+
 Lead-name position is NOT measured here. A pixel-profile measure (labels.pt text boxes
 against the nearest row of dark pixels) was tried and agreed with the JSON truth on only
 5 of 7 synthetic pages, finding 3 names or more on fewer than half of them: the grid rules
@@ -64,6 +84,9 @@ parser.add_argument("--seed", type=int, default=0)
 parser.add_argument("--scale", choices=["rectify", "bootstrap"], default="rectify",
                     help="rectify (default) runs the rectifier network, ~10 s a page on CPU; bootstrap is "
                          "instant but fails or lands on a harmonic on roughly a third of the pages")
+parser.add_argument("--no-grid", action="store_true",
+                    help="skip the grid rule widths (grid5_*/grid1_*): they bring the page to 400 dpi with the "
+                         "digitizer's prepare_page, a second rectifier pass of 5-25 s a page on CPU")
 args = parser.parse_args()
 if bool(args.run_dir) == bool(args.synthetic):
     raise SystemExit("give exactly one of --run-dir (real lot) or --synthetic")
@@ -75,6 +98,15 @@ rect_model = rect_cfg = None
 if args.scale == "rectify":
     from rectifier.rectify import load_for_inference, rectify  # noqa: E402
     rect_model, rect_cfg = load_for_inference(DIGITIZER / "models" / "rectifier_400dpi.pth", "cpu")
+
+page_rectifier = None
+if not args.no_grid:
+    # The pipeline's own page: the app loads rectifier_v2.pth (app/app.py), not the
+    # rectifier_400dpi.pth the scale columns above have always used - those stay as they were,
+    # so older profile CSVs remain comparable.
+    from digitizer.digitizer import prepare_page  # noqa: E402
+    from rectifier.rectify import load_for_inference as _load_rectifier  # noqa: E402
+    page_rectifier = _load_rectifier(DIGITIZER / "models" / "rectifier_v2.pth", "cpu")
 
 
 def scale(page, out):
@@ -146,6 +178,106 @@ def trace(page, px_mm, out):
     out["trace_strokes"] = len(widths)
 
 
+# Grid rule widths on the 400 dpi page (see the docstring). Tile sizes in px of that page.
+GRID_TILE_W, GRID_TILE_H = 240, 400
+GRID_MIN_PERIODICITY = 1.0   # L darker on the 1 mm rows than half a period off: below it, no grid
+GRID_COLUMNS = ["grid5_fwhm_px400", "grid1_fwhm_px400", "grid5_contrast", "grid1_contrast", "grid_tiles"]
+
+
+def grid_phase(lrow, period):
+    """(f1, f5, periodicity) of a row profile of L: the 1 mm phase, the 5 mm phase among the
+    five 1 mm ones, and how much darker the 1 mm rows are than the rows half a period off."""
+    h = len(lrow)
+    ink = 100.0 - lrow
+
+    def mean_at(phase, step):
+        rows = phase + step * np.arange(-1, h / step + 1)
+        rows = rows[(rows >= 0) & (rows <= h - 1)]
+        return np.interp(rows, np.arange(h), ink).mean() if len(rows) else 0.0
+
+    f1 = max(np.arange(0, period, 0.25), key=lambda f: mean_at(f, period))
+    f5 = max((f1 + k * period for k in range(5)), key=lambda f: mean_at(f, 5 * period))
+    return f1, f5, mean_at(f1, period) - mean_at(f1 + period / 2, period)
+
+
+def rule_fwhm(lrow, row):
+    """(fwhm px, contrast) of the rule nearest `row` in a row profile, or None below contrast 4."""
+    h = len(lrow)
+    a0, a1 = max(0, row - 3), min(h, row + 4)
+    row = a0 + int(np.argmin(lrow[a0:a1]))
+    w0, w1 = max(0, row - 7), min(h, row + 8)
+    background, low = float(lrow[w0:w1].max()), float(lrow[row])
+    if background - low < 4:
+        return None
+    half = (background + low) / 2
+    a = b = row
+    while a > w0 and lrow[a - 1] < half:
+        a -= 1
+    while b < w1 - 1 and lrow[b + 1] < half:
+        b += 1
+    return b - a + 1, background - low
+
+
+def grid_tiles(lum, period):
+    """Per tile with a periodic grid: (fwhm 5 mm, contrast 5 mm, fwhm 1 mm, contrast 1 mm)."""
+    import warnings
+    out = []
+    height, width = lum.shape
+    for y0 in range(0, height - GRID_TILE_H // 2, GRID_TILE_H):
+        for x0 in range(0, width - GRID_TILE_W // 2, GRID_TILE_W):
+            tile = lum[y0:y0 + GRID_TILE_H, x0:x0 + GRID_TILE_W]
+            if tile.shape[0] < 6 * period or tile.shape[1] < 100:
+                continue
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")  # rows the stroke mask empties entirely
+                lrow = np.nanmedian(tile, axis=1)
+            known = np.isfinite(lrow)
+            if known.mean() < 0.6:
+                continue
+            lrow = np.where(known, lrow, 100.0)
+            f1, f5, periodicity = grid_phase(lrow, period)
+            if periodicity < GRID_MIN_PERIODICITY:
+                continue
+            major, minor = [], []
+            for k in range(-1, int(len(lrow) / period) + 2):
+                row = f1 + k * period
+                if not 8 <= row <= len(lrow) - 9:
+                    continue
+                steps = (row - f5) / period
+                rule = rule_fwhm(lrow, int(round(row)))
+                if rule is not None:
+                    is_major = abs(steps - round(steps)) < 0.2 and round(steps) % 5 == 0
+                    (major if is_major else minor).append(rule)
+            if major:
+                out.append((np.median([r[0] for r in major]), np.median([r[1] for r in major]),
+                            np.median([r[0] for r in minor]) if minor else np.nan,
+                            np.median([r[1] for r in minor]) if minor else np.nan))
+    return out
+
+
+def grid_rules(page400, period, out):
+    """grid5_*/grid1_* columns: the horizontal rules on the digitizer's 400 dpi page."""
+    out.update({column: "" for column in GRID_COLUMNS})
+    lum = cv2.cvtColor(page400, cv2.COLOR_BGR2LAB)[..., 0].astype(np.float32) / 2.55
+    first = grid_tiles(lum, period)
+    if not first:
+        out["grid_tiles"] = 0
+        return
+    # Leave out the strokes darker than any rule of this page - trace, text, handwriting - and
+    # 10 px above and below them (the reference drops +-10 px around the decoded trace), then
+    # measure again. The threshold follows the page's own rules: a pale grid gets a low one.
+    paper = float(np.percentile(lum, 90))
+    rule_contrast = float(np.nanpercentile([t[1] for t in first], 90))
+    stroke = (paper - lum) > max(30.0, 1.6 * rule_contrast)
+    stroke = cv2.dilate(stroke.astype(np.uint8), np.ones((21, 1), np.uint8)) > 0
+    tiles = np.array(grid_tiles(np.where(stroke, np.nan, lum), period) or first, float)
+    out.update(grid5_fwhm_px400=round(float(np.median(tiles[:, 0])), 2),
+               grid5_contrast=round(float(np.median(tiles[:, 1])), 2),
+               grid1_fwhm_px400=round(float(np.nanmedian(tiles[:, 2])), 2) if np.isfinite(tiles[:, 2]).any() else "",
+               grid1_contrast=round(float(np.nanmedian(tiles[:, 3])), 2) if np.isfinite(tiles[:, 3]).any() else "",
+               grid_tiles=len(tiles))
+
+
 def row_pitch(data):
     """Median baseline-to-baseline distance (mm) of the lead rows of the first column."""
     xs, ys = [], []
@@ -195,6 +327,10 @@ def truth(path, out):
     out["truth_name_position"] = data.get("lead_name_position", "")
     out["truth_dpi"] = data.get("resolution", "")
     out["truth_trace_mm"] = data.get("trace_thickness_mm", "")
+    # inc_grid's draw; absent (the upstream 0.5 pt = 0.176 mm on both rules) when the group is off
+    widths = data.get("grid_line_width_mm") or {}
+    out["truth_grid_major_mm"] = widths.get("major", "")
+    out["truth_grid_minor_mm"] = widths.get("minor", "")
     paper = data.get("paper_color")
     out["truth_paper"] = "" if paper is None else "/".join(str(int(v)) for v in paper)
     for group, flag in (data.get("realism") or {}).items():
@@ -230,12 +366,21 @@ for path, name, rot in todo:
     trace(page, px_mm, out)
     out["alias_1440"] = aliasing_score(page, 1440)
     out["alias_1024"] = aliasing_score(page, 1024)
+    if page_rectifier is not None:
+        stages = prepare_page(page, page_rectifier)
+        out["page400_source"] = stages.source
+        if stages.source == "original":  # no scale: the page never reached 400 dpi
+            out.update({column: "" for column in GRID_COLUMNS})
+        else:
+            grid_rules(stages.page, stages.out_px_per_mm, out)
+        del stages
     if args.synthetic:
         truth(path, out)
     rows.append(out)
-    print("%-28s %s px/mm (%s)  paper %s/%s/%s  cover %s  fwhm %s mm" % (
+    print("%-28s %s px/mm (%s)  paper %s/%s/%s  cover %s  fwhm %s mm  rules 5/1 mm %s/%s px400" % (
         name[:28], out["px_per_mm"] or "?", out["scale_source"] + ("?" if out["scale_suspect"] == 1 else ""), out["paper_r"], out["paper_g"], out["paper_b"], out["grid_cover"],
-        out["trace_fwhm_mm"] or "?"), flush=True)
+        out["trace_fwhm_mm"] or "?", out.get("grid5_fwhm_px400", "-") or "?", out.get("grid1_fwhm_px400", "-") or "?"),
+        flush=True)
 
 columns = []
 for row in rows:
