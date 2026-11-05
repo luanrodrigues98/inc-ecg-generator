@@ -160,7 +160,73 @@ The keys are the argparse destination names of `gen_ecg_images_from_data_batch.p
 - `max_workers` renders that many records at once in worker processes. The peak memory multiplies with the number of workers.
 - `skip_existing` (default 1) resumes a batch: a record is skipped only when all its frames are on disk and finished. With `--store_config 2` this is exact. With 1 it is partial, and with 0 only the existence of the PNG is checked, so delete the output directory instead of resuming.
 
+- `only_records:` restricts the batch to the named records: a list (`[00001_lr, 00002_lr]`) or the path of a file with one name per line. A name that is not in the corpus is an error.
+
 The output is flat: every PNG, JSON and WFDB copy lands directly in `output_directory`, so record names must be unique and the runner refuses duplicates. The corpus is sorted before it is cut, so `max_num_images` picks the same records on any machine.
+
+### Uploading to S3 while the batch renders
+A run larger than the local disk can upload its records as they finish and free the disk when it runs low:
+
+```bash
+nohup ./.venv310/bin/python run_batch_from_config.py batch.yaml \
+    --s3-prefix s3://inc-medical-datastore/<prefix> > run.log 2>&1 &
+```
+
+The prefix is given on the command line, never in the YAML. Without `--s3-prefix` nothing is uploaded. The upload uses the `aws` CLI v2 through a subprocess and the credentials of `aws login`, so a session that expires mid-run is renewed by running `aws login` again, in any terminal. Each call re-reads the credential cache.
+
+- **Upload.** Every lot of `batch_size` finished records goes up as soon as it is rendered, with the names of the digitizer's `make upload-dataset`: `00001_lr-0.png` becomes `00001.png` and `00001_lr.dat` becomes `00001.dat`, flat under the prefix. A lot counts as uploaded only after a listing of the prefix shows every object with the size of its local file. The last, partial lot goes up when rendering ends, and the process waits for it. Ctrl-C at any point is safe.
+- **Delete.** Local copies are deleted only for uploaded records, and only when free space drops below `min_free_gb`, oldest name first, until `target_free_gb` is free. Below `hard_floor_gb` rendering pauses (it does not abort) until `min_free_gb` is free again.
+- **Backlog.** The records already finished on disk at the first start into a prefix are never deleted while `protect_backlog` is true. At that first start the runner lists the prefix:
+  - objects that are byte-size copies of this directory's files are adopted, not uploaded again;
+  - any other object refuses the start, so a prefix holding another dataset is never overwritten;
+  - a `_runner/` already on S3 also refuses the start, because the dataset was started from another directory. The message gives the command that restores it.
+- **Expired session.** A failed upload never stops the render and never deletes anything that is not on S3. When the session has expired, the log prints a banner (`AWS SESSION EXPIRED - run aws login`), `_runner/AWS_SESSION_EXPIRED` appears, and the upload retries every `retry_minutes`.
+- **Required with `--s3-prefix`:** `store_config: 2`, `store_gridpoints: true` and `skip_existing: true`. A directory that has uploaded once must be resumed with the same `--s3-prefix`; another prefix, or none, is refused.
+
+The `upload:` block of the YAML only holds settings, all optional. `extends:` merges it entry by entry, like `randomize:`.
+
+| key | default | meaning |
+|---|---|---|
+| `batch_size` | 100 | records per upload |
+| `min_free_gb` | 40 | below this, uploaded local copies are deleted |
+| `target_free_gb` | 60 | deletion stops when this much is free |
+| `hard_floor_gb` | 15 | below this, rendering pauses |
+| `retry_minutes` | 10 | wait after a failed upload |
+| `timeout_minutes` | 120 | limit for one `aws` call |
+| `aws_profile` | `default` | profile passed to the CLI |
+| `aws_binary` | `aws` on PATH, then `~/.local/bin/aws` | resolved to an absolute path once, at startup |
+| `protect_backlog` | true | never delete the records the first start found on disk |
+
+The runner keeps its state in `output_directory/_runner/` and mirrors it to `<prefix>/_runner/` after every lot:
+
+| file | written by | what it holds |
+|---|---|---|
+| `target.json` | the first start | the prefix this directory uploads to |
+| `ledger.jsonl` | the upload thread, fsynced | one line per uploaded and verified record. A resume reads it before the disk, so it skips the records that only exist on S3 and counts them towards `max_num_images` |
+| `manifest.jsonl` | the render loop, fsynced | one line per record, written when it finishes rendering; the last line of a record wins (fields below) |
+| `protected.txt` | the first start | the backlog names |
+| `config-<sha12>.yaml` | once per config | the resolved config (`extends:` merged) |
+
+A manifest line holds:
+- the record name, its frames, local files and S3 URIs, and its input paths relative to `input_directory`;
+- the seed and the chain seed, the values drawn under `randomize:`, and the annotation of every frame without `leads`, `gridpoints` and `gridpoints_mask`;
+- `config_sha256` of the resolved config, leaving out `max_num_images`, `max_workers`, `skip_existing`, `upload`, `only_records` and `output_directory`;
+- the generator commit and the tracked files with changes at render time.
+
+Records that were already on disk when the manifest started get `source: backfill` and `render_commit: null`.
+
+**Regenerating a deleted page.** Check out its `render_commit` and render it into a new directory from the saved config, without `--s3-prefix`:
+
+```yaml
+extends: /path/to/output_directory/_runner/config-<sha12>.yaml
+output_directory: out/regenerated
+only_records: [07851_lr]
+max_num_images: -1
+```
+
+With the same commit, the same environment and the same machine, the images are byte-identical to the uploaded ones. The font and wrinkle choices follow `os.listdir` order, which depends on the filesystem.
+
+For tests only: when `ECG_RUNNER_FREE_GB_FILE` names a file holding a number, the runner reads the free space from that file instead of the filesystem, so the low-disk paths can be exercised without filling a disk.
 
 Run all of this with the Python 3.10 environment from the installation section. Python 3.12 does not install the requirements.
 
